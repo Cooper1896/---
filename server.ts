@@ -288,10 +288,134 @@ async function startServer() {
     }
   });
 
-  let chatMessages: any[] = [];
+  let chatHistories: Record<string, any[]> = {};
 
-  app.get("/api/chat", (req, res) => {
-    res.json(chatMessages);
+  app.get("/api/chat/:charId", (req, res) => {
+    res.json(chatHistories[req.params.charId] || []);
+  });
+
+  app.post("/api/chat/:charId/sync", (req, res) => {
+    chatHistories[req.params.charId] = req.body.messages;
+    res.json({ success: true });
+  });
+
+  app.post("/api/chat/:charId/clear", (req, res) => {
+    chatHistories[req.params.charId] = [];
+    res.json({ success: true });
+  });
+
+  app.post("/api/sync/up", async (req, res) => {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'GitHub token is required' });
+
+    try {
+      const dataToSync = {
+        characters,
+        lorebooks,
+        chatHistories,
+        settings
+      };
+
+      // Check if we already have a gist ID stored in settings or memory
+      // For simplicity, we'll create a new gist or update if we store the ID.
+      // Let's just create a new one for now, or you can implement finding an existing one.
+      // To make it persistent, we should find a gist named "zenless_tavern_sync.json"
+      
+      const headers = {
+        'Authorization': `token ${token}`,
+        'Accept': 'application/vnd.github.v3+json'
+      };
+
+      // 1. Find existing gist
+      const gistsRes = await fetch('https://api.github.com/gists', { headers });
+      if (!gistsRes.ok) throw new Error('Failed to fetch gists');
+      const gists = await gistsRes.json();
+      
+      let gistId = null;
+      for (const gist of gists) {
+        if (gist.files['zenless_tavern_sync.json']) {
+          gistId = gist.id;
+          break;
+        }
+      }
+
+      const payload = {
+        description: "Zenless Tavern Sync Data",
+        public: false,
+        files: {
+          "zenless_tavern_sync.json": {
+            content: JSON.stringify(dataToSync, null, 2)
+          }
+        }
+      };
+
+      let syncRes;
+      if (gistId) {
+        syncRes = await fetch(`https://api.github.com/gists/${gistId}`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify(payload)
+        });
+      } else {
+        syncRes = await fetch('https://api.github.com/gists', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(payload)
+        });
+      }
+
+      if (!syncRes.ok) throw new Error('Failed to sync to GitHub');
+      
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Sync Up Error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/sync/down", async (req, res) => {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'GitHub token is required' });
+
+    try {
+      const headers = {
+        'Authorization': `token ${token}`,
+        'Accept': 'application/vnd.github.v3+json'
+      };
+
+      const gistsRes = await fetch('https://api.github.com/gists', { headers });
+      if (!gistsRes.ok) throw new Error('Failed to fetch gists');
+      const gists = await gistsRes.json();
+      
+      let gistId = null;
+      for (const gist of gists) {
+        if (gist.files['zenless_tavern_sync.json']) {
+          gistId = gist.id;
+          break;
+        }
+      }
+
+      if (!gistId) {
+        return res.status(404).json({ error: 'No sync data found on GitHub' });
+      }
+
+      const gistRes = await fetch(`https://api.github.com/gists/${gistId}`, { headers });
+      if (!gistRes.ok) throw new Error('Failed to fetch gist content');
+      const gistData = await gistRes.json();
+      
+      const fileContent = gistData.files['zenless_tavern_sync.json'].content;
+      const parsedData = JSON.parse(fileContent);
+
+      if (parsedData.characters) characters = parsedData.characters;
+      if (parsedData.lorebooks) lorebooks = parsedData.lorebooks;
+      if (parsedData.chatHistories) chatHistories = parsedData.chatHistories;
+      if (parsedData.settings) settings = parsedData.settings;
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Sync Down Error:', err);
+      res.status(500).json({ error: err.message });
+    }
   });
 
   app.post("/api/chat", async (req, res) => {
@@ -301,7 +425,7 @@ async function startServer() {
       return res.status(400).json({ error: 'Invalid messages array' });
     }
 
-    const char = characters.find(c => c.id === characterId) || characters[0];
+    const char = characters.find(c => c.id === characterId) || characters[0] || { name: 'AI', description: 'You are a helpful assistant.' };
     
     // If no API key, fallback to mock response
     if (!settings.api.key) {
@@ -320,7 +444,38 @@ async function startServer() {
 
     try {
       let replyContent = '';
-      const systemPrompt = char.description;
+      
+      // --- PROMPT BUILDER ENGINE ---
+      const recentText = messages.slice(-5).map((m: any) => m.content).join('\n');
+      const activeLorebooks = lorebooks.filter(lore => {
+        if (lore.constant) return true;
+        if (!lore.keys || !Array.isArray(lore.keys)) return false;
+        return lore.keys.some((key: string) => {
+          if (!key) return false;
+          return recentText.toLowerCase().includes(key.toLowerCase());
+        });
+      });
+
+      let systemPrompt = `[System Note: You are engaging in a text-based roleplay. You must strictly stay in character as ${char.name}. Use asterisks for *actions and expressions* and quotes for "speech". Do not break character or refer to yourself as an AI.]\n\n`;
+
+      systemPrompt += `[Character Identity: ${char.name}]\n${char.description || ''}\n\n`;
+
+      if (char.personality) {
+        systemPrompt += `[Personality Traits]\n${char.personality}\n\n`;
+      }
+
+      if (activeLorebooks.length > 0) {
+        systemPrompt += `[World Info / Lorebook]\n`;
+        activeLorebooks.forEach(lore => {
+          systemPrompt += `- ${lore.content}\n`;
+        });
+        systemPrompt += `\n`;
+      }
+
+      if (char.mesExample) {
+        systemPrompt += `[Dialogue Examples]\n${char.mesExample}\n\n`;
+      }
+      // -----------------------------
 
       if (settings.api.provider === 'OpenAI' || settings.api.provider === 'Custom') {
         const baseUrl = settings.api.url || 'https://api.openai.com';

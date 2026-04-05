@@ -9,6 +9,8 @@ import Home from './pages/Home';
 import InterKnot from './pages/InterKnot';
 import SettingsPage from './pages/Settings';
 import HollowChat from './pages/HollowChat';
+import HollowInput from './pages/HollowInput';
+import TimeSync from './pages/TimeSync';
 
 export default function App() {
   return (
@@ -17,9 +19,11 @@ export default function App() {
         <Route path="/" element={<Layout />}>
           <Route index element={<Home />} />
           <Route path="inter-knot" element={<InterKnot />} />
+          <Route path="time-sync" element={<TimeSync />} />
           <Route path="settings" element={<SettingsPage />} />
-          <Route path="hollow" element={<HollowChat />} />
         </Route>
+        <Route path="/hollow-input" element={<HollowInput />} />
+        <Route path="/hollow" element={<HollowChat />} />
       </Routes>
     </BrowserRouter>
   );

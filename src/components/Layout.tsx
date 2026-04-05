@@ -25,8 +25,8 @@ export default function Layout() {
           </div>
           <div className="h-4 w-[2px] bg-[#353535]"></div>
           <div className="font-headline tracking-widest uppercase text-xs flex gap-6">
-            <a href="#" className="text-[#FFF000] border-b-2 border-[#FFF000] pb-1">区域</a>
-            <a href="#" className="text-[#959177] hover:bg-[#FFF000] hover:text-[#131313] transition-all duration-75 hover:skew-x-2">时间同步</a>
+            <Link to="/" className={`pb-1 ${location.pathname === '/' ? 'text-[#FFF000] border-b-2 border-[#FFF000]' : 'text-[#959177] hover:bg-[#FFF000] hover:text-[#131313] transition-all duration-75 hover:skew-x-2'}`}>区域</Link>
+            <Link to="/time-sync" className={`pb-1 ${location.pathname === '/time-sync' ? 'text-[#FFF000] border-b-2 border-[#FFF000]' : 'text-[#959177] hover:bg-[#FFF000] hover:text-[#131313] transition-all duration-75 hover:skew-x-2'}`}>时间同步</Link>
             <a href="#" className="text-[#959177] hover:bg-[#FFF000] hover:text-[#131313] transition-all duration-75 hover:skew-x-2">信号</a>
           </div>
         </div>
@@ -56,8 +56,8 @@ export default function Layout() {
             <Network className="w-5 h-5" /> 代理人网络
           </Link>
           <Link 
-            to="/hollow" 
-            className={`p-4 my-2 mx-2 font-headline font-bold text-sm tracking-tighter flex items-center gap-3 transition-transform duration-100 ${location.pathname === '/hollow' ? 'bg-[#FFF000] text-[#131313] clip-path-chamfer' : 'text-[#959177] hover:bg-[#353535] hover:translate-x-2 hover:text-[#00DAF3]'}`}
+            to="/hollow-input" 
+            className={`p-4 my-2 mx-2 font-headline font-bold text-sm tracking-tighter flex items-center gap-3 transition-transform duration-100 ${location.pathname === '/hollow-input' ? 'bg-[#FFF000] text-[#131313] clip-path-chamfer' : 'text-[#959177] hover:bg-[#353535] hover:translate-x-2 hover:text-[#00DAF3]'}`}
           >
             <Radio className="w-5 h-5" /> 深度空洞
           </Link>

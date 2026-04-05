@@ -34,7 +34,7 @@ export default function Home() {
                 <Zap className="w-4 h-4 fill-current" /> 优先级: ALPHA
               </div>
               <div className="text-4xl font-black font-headline text-white mb-6">进入空洞</div>
-              <Link to="/hollow" className="w-full bg-[#FFF000] text-[#131313] py-4 px-6 font-headline font-black text-xl clip-path-chamfer-small flex justify-between items-center hover:bg-white transition-colors group/btn block">
+              <Link to="/hollow-input" className="w-full bg-[#FFF000] text-[#131313] py-4 px-6 font-headline font-black text-xl clip-path-chamfer-small flex justify-between items-center hover:bg-white transition-colors group/btn block">
                 进入空洞 
                 <ChevronsRight className="w-6 h-6 transition-transform group-hover/btn:translate-x-2" />
               </Link>
