@@ -1,10 +1,23 @@
-import express from "express";
+﻿import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
+import type {
+  AILog,
+  AppSettings,
+  Character,
+  ChatMessage,
+  DbSettings,
+  Extension,
+  Lorebook,
+  SettingsBootstrap,
+  SummaryEntry,
+  Theme,
+  VectorEntry,
+} from "./src/shared/contracts";
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = 3002;
 
   app.use(express.json());
 
@@ -21,7 +34,7 @@ async function startServer() {
     { id: 9, time: '04:21:36.102', method: 'GET', path: '/api/tavern/drink/menu', status: 200, latency: '15ms', ip: '192.168.1.104' },
   ];
 
-  let settings = {
+  let settings: AppSettings = {
     tavern: {
       enabled: true,
       currentPreset: 'default',
@@ -43,8 +56,99 @@ async function startServer() {
     theme: '墨色经典'
   };
 
-  let characters: any[] = [];
-  let lorebooks: any[] = [];
+  let characters: Character[] = [];
+  let lorebooks: Lorebook[] = [];
+  let aiLogs: AILog[] = [];
+  let proxyScenarios: Record<string, string> = {};
+
+  const fallbackCharacter: Character = {
+    id: "fallback-character",
+    name: "AI",
+    description: "You are a helpful assistant.",
+    personality: "",
+    firstMessage: "",
+    mesExample: "",
+  };
+
+  const sanitizeSettingsForSync = (input: AppSettings): AppSettings => ({
+    ...input,
+    api: {
+      ...input.api,
+      key: "",
+      savedPreset: input.api.savedPreset
+        ? { ...input.api.savedPreset, key: "" }
+        : undefined,
+    },
+  });
+
+  const mergeSettingsFromSync = (incoming: AppSettings): AppSettings => {
+    const currentApiKey = settings.api.key;
+    const currentSavedPresetKey = settings.api.savedPreset?.key ?? "";
+
+    const merged: AppSettings = {
+      ...settings,
+      ...incoming,
+      api: {
+        ...settings.api,
+        ...incoming.api,
+      },
+    };
+
+    if (merged.api.savedPreset) {
+      merged.api.savedPreset = {
+        ...merged.api.savedPreset,
+        key: currentSavedPresetKey,
+      };
+    }
+
+    merged.api.key = currentApiKey;
+    return merged;
+  };
+
+  const findSyncGistId = async (headers: Record<string, string>): Promise<string | null> => {
+    for (let page = 1; page <= 20; page += 1) {
+      const gistsRes = await fetch(`https://api.github.com/gists?per_page=100&page=${page}`, { headers });
+      if (!gistsRes.ok) throw new Error("Failed to fetch gists");
+
+      const gists = await gistsRes.json();
+      if (!Array.isArray(gists)) throw new Error("Unexpected GitHub gists response");
+
+      const matched = gists.find((gist: any) => Boolean(gist?.files?.["zenless_tavern_sync.json"]));
+      if (matched?.id) {
+        return matched.id as string;
+      }
+
+      if (gists.length < 100) {
+        break;
+      }
+    }
+
+    return null;
+  };
+
+  const readSyncFileFromGist = async (gistData: any): Promise<string> => {
+    const syncFile = gistData?.files?.["zenless_tavern_sync.json"];
+    if (!syncFile) throw new Error("Sync file not found in gist");
+
+    if (typeof syncFile.content === "string") {
+      return syncFile.content;
+    }
+
+    if (typeof syncFile.raw_url === "string") {
+      const rawRes = await fetch(syncFile.raw_url, {
+        headers: { Accept: "application/vnd.github.v3.raw" },
+      });
+
+      if (!rawRes.ok) throw new Error("Failed to fetch gist raw content");
+      return rawRes.text();
+    }
+
+    throw new Error("Sync file content unavailable");
+  };
+
+  app.get("/api/ai-logs", (req, res) => {
+    res.json(aiLogs);
+  });
 
   app.get("/api/characters", (req, res) => {
     res.json(characters);
@@ -97,23 +201,49 @@ async function startServer() {
   });
 
   // Extensions System
-  let extensions: any[] = [];
-  const stRepo = [
-    { id: 'st-tts', name: 'SillyTavern TTS', description: '文本转语音支持 (ElevenLabs, Silero, Edge-TTS 等)。', author: 'SillyTavern', version: '1.0.0' },
-    { id: 'st-dnd-dice', name: 'D&D Dice Roller', description: '在聊天中使用 /roll 命令掷骰子。', author: 'SillyTavern', version: '1.2.0' },
-    { id: 'st-image-gen', name: 'Image Generation', description: '使用 Stable Diffusion 或 DALL-E 生成图片。', author: 'SillyTavern', version: '2.1.0' },
-    { id: 'st-websearch', name: 'Web Search', description: '允许角色搜索网络以获取最新信息。', author: 'SillyTavern', version: '1.0.5' },
-    { id: 'st-memory', name: 'Vector Storage', description: '使用向量数据库的长期记忆扩展 (ChromaDB)。', author: 'SillyTavern', version: '1.5.2' },
-    { id: 'st-expressions', name: 'Character Expressions', description: '根据对话情感自动切换角色立绘表情。', author: 'SillyTavern', version: '2.0.1' }
+  let extensions: Extension[] = [];
+  const stRepo: Extension[] = [
+    { id: 'st-tts', name: 'SillyTavern TTS', description: 'Text-to-Speech support (ElevenLabs, Silero, Edge-TTS)', author: 'SillyTavern', version: '1.0.0' },
+    { id: 'st-dnd-dice', name: 'D&D Dice Roller', description: 'D&D Dice Roller for chat (/roll)', author: 'SillyTavern', version: '1.2.0' },
+    { id: 'st-image-gen', name: 'Image Generation', description: 'Stable Diffusion & DALL-E generation', author: 'SillyTavern', version: '2.1.0' },
+    { id: 'st-websearch', name: 'Web Search', description: 'Web search for up-to-date info', author: 'SillyTavern', version: '1.0.5' },
+    { id: 'st-memory', name: 'Vector Storage', description: 'Vector DB (ChromaDB) long term memory', author: 'SillyTavern', version: '1.5.2' },
+    { id: 'st-expressions', name: 'Character Expressions', description: 'Auto-switch character expressions based on sentiment', author: 'SillyTavern', version: '2.0.1' }
   ];
 
   app.get("/api/extensions", (req, res) => {
     res.json(extensions);
   });
 
-  app.get("/api/extensions/repo", (req, res) => {
-    // Simulate network delay for repo fetch
-    setTimeout(() => res.json(stRepo), 600);
+  app.get("/api/extensions/repo", async (req, res) => {
+    const repoUrl = typeof req.query.url === "string" ? req.query.url.trim() : "";
+
+    if (!repoUrl) {
+      setTimeout(() => res.json(stRepo), 600);
+      return;
+    }
+
+    try {
+      const remoteUrl = new URL(repoUrl);
+
+      if (!["http:", "https:"].includes(remoteUrl.protocol)) {
+        return res.status(400).json({ error: "Invalid repository URL" });
+      }
+
+      const response = await fetch(remoteUrl.toString());
+      if (!response.ok) {
+        throw new Error(`Repository request failed with status ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (!Array.isArray(data)) {
+        return res.status(400).json({ error: "Repository index must be an array" });
+      }
+
+      res.json(data);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
   });
 
   app.post("/api/extensions/install", (req, res) => {
@@ -136,7 +266,7 @@ async function startServer() {
   });
 
   // Database Management System
-  let dbSettings = {
+  let dbSettings: DbSettings = {
     vectorApi: {
       enabled: false,
       url: '',
@@ -152,8 +282,8 @@ async function startServer() {
     }
   };
 
-  let vectorDb: any[] = [];
-  let summaryDb: any[] = [];
+  let vectorDb: VectorEntry[] = [];
+  let summaryDb: SummaryEntry[] = [];
 
   app.get("/api/db/settings", (req, res) => {
     res.json(dbSettings);
@@ -175,7 +305,7 @@ async function startServer() {
     }
     
     try {
-      let summaryText = "这是一个模拟的总结内容。由于未配置真实的API Key，返回此占位符。";
+      let summaryText = "This is a simulated summary content. Since no real API Key is configured, returning this placeholder."
       
       if (dbSettings.summaryApi.key && dbSettings.summaryApi.key !== 'dummy') {
         const response = await fetch(`${dbSettings.summaryApi.url}/chat/completions`, {
@@ -234,12 +364,27 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  const themes = [
-    { id: '墨色经典', name: '墨色经典', desc: '参考传统黑金 UI 与国风界面常用搭配，沉稳、厚重。', colors: ['#1a1a1a', '#2a2a2a', '#d4af37', '#4a90e2'] },
-    { id: '青鸾入梦', name: '青鸾入梦', desc: '参考高对比深绿与亮青配色，偏现代阅读体验。', colors: ['#0a1f1c', '#11332d', '#00ffaa', '#aaffee'] },
-    { id: '赤金残阳', name: '赤金残阳', desc: '参考夕阳、铜火、琥珀调，强调戏剧感与热烈氛围。', colors: ['#2b1100', '#4a1c00', '#ff8c00', '#ff3300'] },
-    { id: '寒玉山岚', name: '寒玉山岚', desc: '重新调整为偏冷墨绿与玉石灰青，不再与其他主题重复。', colors: ['#0d1a18', '#1a332f', '#88ccaa', '#cceeff'] },
+  const themes: Theme[] = [
+    { id: 'zzz-default', name: 'ZZZ Default', description: 'Neon Hacker', colors: ['#131313', '#00DAF3', '#FFF000', '#1c1b1b'] },
+    { id: 'belobog', name: 'Belobog Heavy Industries', description: 'Industrial', colors: ['#1a1a1a', '#2a2a2a', '#d4af37', '#252525'] },
+    { id: 'victoria', name: 'Victoria Housekeeping', description: 'Elegant Maid', colors: ['#2c1836', '#4a154b', '#f5e6e8', '#381f45'] },
+    { id: 'gentle-house', name: 'Cunning Hares', description: 'Street Style', colors: ['#1f2937', '#10b981', '#f3f4f6', '#111827'] }
   ];
+
+  app.get("/api/settings/bootstrap", (req, res) => {
+    const bootstrap: SettingsBootstrap = {
+      settings,
+      themes,
+      characters,
+      lorebooks,
+      extensions,
+      dbSettings,
+      summaryDb,
+      vectorDb,
+    };
+
+    res.json(bootstrap);
+  });
 
   // API routes FIRST
   app.get("/api/health", (req, res) => {
@@ -267,8 +412,10 @@ async function startServer() {
     const { provider, url, key } = req.body;
     try {
       if (provider === 'OpenAI' || provider === 'Custom') {
-        const baseUrl = url || 'https://api.openai.com';
-        const endpoint = baseUrl.replace(/\/+$/, '') + '/v1/models';
+          let baseUrl = url || 'https://api.openai.com';
+          baseUrl = baseUrl.replace(/\/+$/, '');
+          if (!baseUrl.endsWith('/v1')) baseUrl += '/v1';
+          const endpoint = baseUrl + '/models';
         const response = await fetch(endpoint, {
           headers: { 'Authorization': `Bearer ${key}` }
         });
@@ -289,8 +436,63 @@ async function startServer() {
     }
   });
 
-  let interKnotHistories: Record<string, any[]> = {};
-  let hollowHistory: any[] = [];
+  app.post("/api/test-connection", async (req, res) => {
+    const { provider, url, key, model } = req.body;
+    try {
+      if ((provider === "OpenAI" || provider === "Custom" || provider === "Gemini") && !model) {
+        return res.status(400).json({ error: "Please select a model before testing the connection" });
+      }
+
+      const messages = [{ role: 'user', content: 'Hi' }];
+      let responseText = '';
+
+      if (provider === 'OpenAI' || provider === 'Custom') {
+        let baseUrl = url || 'https://api.openai.com';
+        baseUrl = baseUrl.replace(/\/+$/, '');
+        if (!baseUrl.endsWith('/v1')) baseUrl += '/v1';
+        const endpoint = baseUrl + '/chat/completions';
+
+        const aiRes = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${key}`
+          },
+          body: JSON.stringify({
+            model: model || 'gpt-3.5-turbo',
+            messages: messages,
+            max_tokens: 10
+          })
+        });
+
+        if (!aiRes.ok) throw new Error(`API Error: ${aiRes.statusText}`);
+        const data = await aiRes.json();
+        responseText = data.choices[0].message.content;
+      } else if (provider === 'Gemini') {
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+        const aiRes = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: "Hi" }] }]
+          })
+        });
+
+        if (!aiRes.ok) throw new Error(`API Error: ${aiRes.statusText}`);
+        const data = await aiRes.json();
+        responseText = data.candidates[0].content.parts[0].text;
+      } else {
+        responseText = 'Test reply from Mock Provider';
+      }
+
+      res.json({ success: true, message: responseText });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  let interKnotHistories: Record<string, ChatMessage[]> = {};
+  let hollowHistory: ChatMessage[] = [];
 
   // --- Inter-Knot (Agent Network) Endpoints ---
   app.get("/api/interknot/:charId", (req, res) => {
@@ -304,6 +506,42 @@ async function startServer() {
 
   app.post("/api/interknot/:charId/clear", (req, res) => {
     interKnotHistories[req.params.charId] = [];
+    res.json({ success: true });
+  });
+
+  // --- Proxy (Single Character) Endpoints ---
+  app.get("/api/proxy/history", (req, res) => {
+    const charId = typeof req.query.charId === "string" ? req.query.charId : "";
+    if (!charId) {
+      return res.status(400).json({ error: "charId is required" });
+    }
+
+    res.json(interKnotHistories[charId] || []);
+  });
+
+  app.post("/api/proxy/sync", (req, res) => {
+    const { charId, messages, scenario } = req.body;
+    if (!charId || !Array.isArray(messages)) {
+      return res.status(400).json({ error: "charId and messages are required" });
+    }
+
+    interKnotHistories[charId] = messages;
+
+    if (typeof scenario === "string") {
+      proxyScenarios[charId] = scenario;
+    }
+
+    res.json({ success: true });
+  });
+
+  app.post("/api/proxy/clear", (req, res) => {
+    const { charId } = req.body;
+    if (!charId) {
+      return res.status(400).json({ error: "charId is required" });
+    }
+
+    interKnotHistories[charId] = [];
+    delete proxyScenarios[charId];
     res.json({ success: true });
   });
 
@@ -322,6 +560,30 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  app.post("/api/sync/validate", async (req, res) => {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'GitHub token is required' });
+
+    try {
+      const headers = {
+        'Authorization': `token ${token}`,
+        'Accept': 'application/vnd.github.v3+json'
+      };
+
+      const userRes = await fetch('https://api.github.com/user', { headers });
+      if (!userRes.ok) throw new Error('Invalid GitHub token');
+
+      const user = await userRes.json();
+      res.json({
+        success: true,
+        login: user.login,
+        avatarUrl: user.avatar_url
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.post("/api/sync/up", async (req, res) => {
     const { token } = req.body;
     if (!token) return res.status(400).json({ error: 'GitHub token is required' });
@@ -332,31 +594,16 @@ async function startServer() {
         lorebooks,
         interKnotHistories,
         hollowHistory,
-        settings
+        proxyScenarios,
+        settings: sanitizeSettingsForSync(settings),
       };
-
-      // Check if we already have a gist ID stored in settings or memory
-      // For simplicity, we'll create a new gist or update if we store the ID.
-      // Let's just create a new one for now, or you can implement finding an existing one.
-      // To make it persistent, we should find a gist named "zenless_tavern_sync.json"
       
       const headers = {
         'Authorization': `token ${token}`,
         'Accept': 'application/vnd.github.v3+json'
       };
 
-      // 1. Find existing gist
-      const gistsRes = await fetch('https://api.github.com/gists', { headers });
-      if (!gistsRes.ok) throw new Error('Failed to fetch gists');
-      const gists = await gistsRes.json();
-      
-      let gistId = null;
-      for (const gist of gists) {
-        if (gist.files['zenless_tavern_sync.json']) {
-          gistId = gist.id;
-          break;
-        }
-      }
+      const gistId = await findSyncGistId(headers);
 
       const payload = {
         description: "Zenless Tavern Sync Data",
@@ -402,17 +649,7 @@ async function startServer() {
         'Accept': 'application/vnd.github.v3+json'
       };
 
-      const gistsRes = await fetch('https://api.github.com/gists', { headers });
-      if (!gistsRes.ok) throw new Error('Failed to fetch gists');
-      const gists = await gistsRes.json();
-      
-      let gistId = null;
-      for (const gist of gists) {
-        if (gist.files['zenless_tavern_sync.json']) {
-          gistId = gist.id;
-          break;
-        }
-      }
+      const gistId = await findSyncGistId(headers);
 
       if (!gistId) {
         return res.status(404).json({ error: 'No sync data found on GitHub' });
@@ -422,7 +659,7 @@ async function startServer() {
       if (!gistRes.ok) throw new Error('Failed to fetch gist content');
       const gistData = await gistRes.json();
       
-      const fileContent = gistData.files['zenless_tavern_sync.json'].content;
+      const fileContent = await readSyncFileFromGist(gistData);
       const parsedData = JSON.parse(fileContent);
 
       if (parsedData.characters) characters = parsedData.characters;
@@ -430,7 +667,8 @@ async function startServer() {
       if (parsedData.interKnotHistories) interKnotHistories = parsedData.interKnotHistories;
       if (parsedData.hollowHistory) hollowHistory = parsedData.hollowHistory;
       if (parsedData.chatHistories) interKnotHistories = parsedData.chatHistories; // Backward compatibility
-      if (parsedData.settings) settings = parsedData.settings;
+      if (parsedData.proxyScenarios) proxyScenarios = parsedData.proxyScenarios;
+      if (parsedData.settings) settings = mergeSettingsFromSync(parsedData.settings);
 
       res.json({ success: true });
     } catch (err: any) {
@@ -439,140 +677,230 @@ async function startServer() {
     }
   });
 
-  app.post("/api/interknot/chat", async (req, res) => {
-    const { messages, characterId } = req.body;
-    
-    if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: 'Invalid messages array' });
-    }
+  const runCharacterChat = async ({
+    messages,
+    characterId,
+    scenario,
+    logType,
+  }: {
+    messages: ChatMessage[];
+    characterId?: string;
+    scenario?: string;
+    logType: string;
+  }) => {
+    const char: Character =
+      characters.find(c => c.id === characterId) ??
+      characters[0] ??
+      fallbackCharacter;
 
-    const char = characters.find(c => c.id === characterId) || characters[0] || { name: 'AI', description: 'You are a helpful assistant.' };
-    
+    const latestMessage = messages[messages.length - 1]?.content ?? "";
+
     // If no API key, fallback to mock response
     if (!settings.api.key) {
-      setTimeout(() => {
-        const botMessage = {
-          id: Date.now(),
-          role: 'npc',
-          name: char.name,
-          content: `[未配置API密钥] 收到指令：“${messages[messages.length - 1].content}”。请在设置中配置API密钥以启用真实对话。`,
-          timestamp: new Date().toISOString()
-        };
-        res.json(botMessage);
-      }, 1000);
-      return;
+      return {
+        id: Date.now(),
+        role: "npc" as const,
+        name: char.name,
+        content: `[未配置API密钥] 收到指令：“${latestMessage}”。请在设置中配置API密钥以启用真实对话。`,
+        timestamp: new Date().toISOString(),
+      };
+    }
+
+    let replyContent = "";
+
+    // --- PROMPT BUILDER ENGINE ---
+    const recentText = messages
+      .slice(-5)
+      .map((m: ChatMessage) => m.content)
+      .join("\n");
+    const activeLorebooks = lorebooks.filter(lore => {
+      if (lore.constant) return true;
+      if (!lore.keys || !Array.isArray(lore.keys)) return false;
+      return lore.keys.some((key: string) => {
+        if (!key) return false;
+        return recentText.toLowerCase().includes(key.toLowerCase());
+      });
+    });
+
+    let systemPrompt = `[System Note: You are engaging in a private 1-on-1 text-based roleplay (Agent Network). You must strictly stay in character as ${char.name}. This is a focused scenario with the user. Other characters may appear briefly to drive the plot, but they are not the main focus. Use asterisks for *actions and expressions* and quotes for "speech". Do not break character or refer to yourself as an AI.]\n\n`;
+
+    systemPrompt += `[Character Identity: ${char.name}]\n${char.description || ""}\n\n`;
+
+    if (char.personality) {
+      systemPrompt += `[Personality Traits]\n${char.personality}\n\n`;
+    }
+
+    const scenarioText = scenario?.trim();
+    if (scenarioText) {
+      systemPrompt += `[Current Scenario]\n${scenarioText}\n\n`;
+    }
+
+    if (activeLorebooks.length > 0) {
+      systemPrompt += `[World Info / Lorebook]\n`;
+      activeLorebooks.forEach(lore => {
+        systemPrompt += `- ${lore.content}\n`;
+      });
+      systemPrompt += `\n`;
+    }
+
+    if (char.mesExample) {
+      systemPrompt += `[Dialogue Examples]\n${char.mesExample}\n\n`;
+    }
+
+    if (settings.api.jailbreakPrompt) {
+      systemPrompt += "\n[System Override / Jailbreak]\n" + settings.api.jailbreakPrompt + "\n\n";
+    }
+
+    // INJECT SUMMARY DB MEMORY
+    if (summaryDb && summaryDb.length > 0) {
+      systemPrompt += "<|背景世界记忆/总结|>\n";
+      summaryDb.slice(-3).forEach(summ => {
+        systemPrompt += "- " + summ.content + "\n";
+      });
+      systemPrompt += "</背景世界记忆/总结>\n\n";
+    }
+
+    // --- CONTEXT PRUNING ---
+    const maxContextChars = (Number(settings.api.context_size) || 4096) * 2.5;
+    let currentLength = systemPrompt.length;
+    const prunedMessages: ChatMessage[] = [];
+
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const msgLen = messages[i].content.length;
+      if (currentLength + msgLen > maxContextChars && prunedMessages.length > 0) break;
+      prunedMessages.unshift(messages[i]);
+      currentLength += msgLen;
+    }
+    // -----------------------------
+
+    if (settings.api.provider === "OpenAI" || settings.api.provider === "Custom") {
+      let baseUrl = settings.api.url || "https://api.openai.com";
+      baseUrl = baseUrl.replace(/\/+$/, "");
+      if (!baseUrl.endsWith("/v1")) baseUrl += "/v1";
+      const endpoint = baseUrl + "/chat/completions";
+
+      const apiMessages = [
+        { role: "system", content: systemPrompt },
+        ...prunedMessages.map(m => ({
+          role: m.role === "npc" ? "assistant" : "user",
+          content: m.content,
+        })),
+      ];
+
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${settings.api.key}`,
+        },
+        body: JSON.stringify({
+          model: settings.api.model,
+          messages: apiMessages,
+          temperature: Number(settings.api.temperature),
+          max_tokens: Number(settings.api.max_tokens),
+          top_p: Number(settings.api.top_p),
+        }),
+      });
+
+      if (!response.ok) {
+        const errData = await response.text();
+        throw new Error(`API Error: ${response.status} - ${errData}`);
+      }
+      const data = await response.json();
+      replyContent = data?.choices?.[0]?.message?.content ?? "";
+    } else if (settings.api.provider === "Gemini") {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${settings.api.model}:generateContent?key=${settings.api.key}`;
+
+      const geminiMessages = prunedMessages.map(m => ({
+        role: m.role === "npc" ? "model" : "user",
+        parts: [{ text: m.content }],
+      }));
+
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: systemPrompt }] },
+          contents: geminiMessages,
+          generationConfig: {
+            temperature: Number(settings.api.temperature),
+            maxOutputTokens: Number(settings.api.max_tokens),
+            topP: Number(settings.api.top_p),
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const errData = await response.text();
+        throw new Error(`API Error: ${response.status} - ${errData}`);
+      }
+      const data = await response.json();
+      replyContent = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+    }
+
+    const botMessage = {
+      id: Date.now(),
+      role: "npc" as const,
+      name: char.name,
+      content: replyContent,
+      timestamp: new Date().toISOString(),
+    };
+
+    aiLogs.unshift({
+      id: botMessage.id,
+      timestamp: botMessage.timestamp,
+      type: logType,
+      model: settings.api.model || undefined,
+      prompt: systemPrompt + "\n\n[Messages]\n" + JSON.stringify(messages, null, 2),
+      response: replyContent,
+    });
+    if (aiLogs.length > 50) aiLogs = aiLogs.slice(0, 50);
+
+    return botMessage;
+  };
+
+  app.post("/api/interknot/chat", async (req, res) => {
+    const { messages, characterId } = req.body;
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: "Invalid messages array" });
     }
 
     try {
-      let replyContent = '';
-      
-      // --- PROMPT BUILDER ENGINE ---
-      const recentText = messages.slice(-5).map((m: any) => m.content).join('\n');
-      const activeLorebooks = lorebooks.filter(lore => {
-        if (lore.constant) return true;
-        if (!lore.keys || !Array.isArray(lore.keys)) return false;
-        return lore.keys.some((key: string) => {
-          if (!key) return false;
-          return recentText.toLowerCase().includes(key.toLowerCase());
-        });
+      const botMessage = await runCharacterChat({
+        messages,
+        characterId,
+        scenario: undefined,
+        logType: "InterKnot Chat",
       });
-
-      let systemPrompt = `[System Note: You are engaging in a private 1-on-1 text-based roleplay (Agent Network). You must strictly stay in character as ${char.name}. This is a focused scenario with the user. Other characters may appear briefly to drive the plot, but they are not the main focus. Use asterisks for *actions and expressions* and quotes for "speech". Do not break character or refer to yourself as an AI.]\n\n`;
-
-      systemPrompt += `[Character Identity: ${char.name}]\n${char.description || ''}\n\n`;
-
-      if (char.personality) {
-        systemPrompt += `[Personality Traits]\n${char.personality}\n\n`;
-      }
-
-      if (activeLorebooks.length > 0) {
-        systemPrompt += `[World Info / Lorebook]\n`;
-        activeLorebooks.forEach(lore => {
-          systemPrompt += `- ${lore.content}\n`;
-        });
-        systemPrompt += `\n`;
-      }
-
-      if (char.mesExample) {
-        systemPrompt += `[Dialogue Examples]\n${char.mesExample}\n\n`;
-      }
-
-      if (settings.api.jailbreakPrompt) {
-        systemPrompt += `\n[System Override / Jailbreak]\n${settings.api.jailbreakPrompt}\n\n`;
-      }
-      // -----------------------------
-
-      if (settings.api.provider === 'OpenAI' || settings.api.provider === 'Custom') {
-        const baseUrl = settings.api.url || 'https://api.openai.com';
-        const endpoint = baseUrl.replace(/\/+$/, '') + '/v1/chat/completions';
-        
-        const apiMessages = [
-          { role: 'system', content: systemPrompt },
-          ...messages.map(m => ({ role: m.role === 'npc' ? 'assistant' : 'user', content: m.content }))
-        ];
-
-        const response = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${settings.api.key}`
-          },
-          body: JSON.stringify({
-            model: settings.api.model,
-            messages: apiMessages,
-            temperature: Number(settings.api.temperature),
-            max_tokens: Number(settings.api.max_tokens),
-            top_p: Number(settings.api.top_p)
-          })
-        });
-        
-        if (!response.ok) {
-          const errData = await response.text();
-          throw new Error(`API Error: ${response.status} - ${errData}`);
-        }
-        const data = await response.json();
-        replyContent = data.choices[0].message.content;
-
-      } else if (settings.api.provider === 'Gemini') {
-        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${settings.api.model}:generateContent?key=${settings.api.key}`;
-        
-        const geminiMessages = messages.map(m => ({
-          role: m.role === 'npc' ? 'model' : 'user',
-          parts: [{ text: m.content }]
-        }));
-
-        const response = await fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            system_instruction: { parts: [{ text: systemPrompt }] },
-            contents: geminiMessages,
-            generationConfig: {
-              temperature: Number(settings.api.temperature),
-              maxOutputTokens: Number(settings.api.max_tokens),
-              topP: Number(settings.api.top_p)
-            }
-          })
-        });
-        
-        if (!response.ok) {
-          const errData = await response.text();
-          throw new Error(`API Error: ${response.status} - ${errData}`);
-        }
-        const data = await response.json();
-        replyContent = data.candidates[0].content.parts[0].text;
-      }
-
-      const botMessage = {
-        id: Date.now(),
-        role: 'npc',
-        name: char.name,
-        content: replyContent,
-        timestamp: new Date().toISOString()
-      };
-      
       res.json(botMessage);
+    } catch (error: any) {
+      console.error("Chat API Error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
 
+  app.post("/api/proxy/chat", async (req, res) => {
+    const { messages, charId, scenario } = req.body;
+    if (!charId) {
+      return res.status(400).json({ error: "charId is required" });
+    }
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: "Invalid messages array" });
+    }
+
+    try {
+      const scenarioText = typeof scenario === "string" ? scenario : proxyScenarios[charId];
+      if (typeof scenarioText === "string") {
+        proxyScenarios[charId] = scenarioText;
+      }
+
+      const botMessage = await runCharacterChat({
+        messages,
+        characterId: charId,
+        scenario: scenarioText,
+        logType: "Proxy Chat",
+      });
+      res.json(botMessage);
     } catch (error: any) {
       console.error("Chat API Error:", error);
       res.status(500).json({ error: error.message });
@@ -589,11 +917,12 @@ async function startServer() {
     // If no API key, fallback to mock response
     if (!settings.api.key) {
       setTimeout(() => {
+        const latestMessage = messages[messages.length - 1]?.content ?? "";
         const botMessage = {
           id: Date.now(),
           role: 'npc',
           name: 'World',
-          content: `[未配置API密钥] 收到探索指令：“${messages[messages.length - 1].content}”。请在设置中配置API密钥以启用真实世界探索。`,
+          content: `[未配置API密钥] 收到探索指令：“${latestMessage}”。请在设置中配置API密钥以启用真实世界探索。`,
           timestamp: new Date().toISOString()
         };
         res.json(botMessage);
@@ -633,17 +962,38 @@ The following agents/characters are currently bound to the user and are silently
       }
 
       if (settings.api.jailbreakPrompt) {
-        systemPrompt += `\n[System Override / Jailbreak]\n${settings.api.jailbreakPrompt}\n\n`;
+        systemPrompt += "\n[System Override / Jailbreak]\n" + settings.api.jailbreakPrompt + "\n\n";
+      }
+
+      // INJECT SUMMARY DB MEMORY
+      if (summaryDb && summaryDb.length > 0) {
+        systemPrompt += "<|背景世界记忆/总结|>\n";
+        summaryDb.slice(-3).forEach(summ => {
+          systemPrompt += "- " + summ.content + "\n";
+        });
+        systemPrompt += "</背景世界记忆/总结>\n\n";
+      }
+
+      // --- CONTEXT PRUNING ---
+      const maxContextChars = (Number(settings.api.context_size) || 4096) * 2.5;
+      let currentLength = systemPrompt.length;
+      let prunedMessages = [];
+
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const msgLen = messages[i].content.length;
+        if (currentLength + msgLen > maxContextChars && prunedMessages.length > 0) break;
+        prunedMessages.unshift(messages[i]);
+        currentLength += msgLen;
       }
       // -----------------------------
 
       if (settings.api.provider === 'OpenAI' || settings.api.provider === 'Custom') {
-        const baseUrl = settings.api.url || 'https://api.openai.com';
-        const endpoint = baseUrl.replace(/\/+$/, '') + '/v1/chat/completions';
-        
+        let baseUrl = settings.api.url || 'https://api.openai.com';
+        baseUrl = baseUrl.replace(/\/+$/, ''); if (!baseUrl.endsWith('/v1')) baseUrl += '/v1'; const endpoint = baseUrl + '/chat/completions';
+
         const apiMessages = [
           { role: 'system', content: systemPrompt },
-          ...messages.map(m => ({ role: m.role === 'npc' ? 'assistant' : 'user', content: m.content }))
+          ...prunedMessages.map(m => ({ role: m.role === 'npc' ? 'assistant' : 'user', content: m.content }))
         ];
 
         const response = await fetch(endpoint, {
@@ -671,7 +1021,7 @@ The following agents/characters are currently bound to the user and are silently
       } else if (settings.api.provider === 'Gemini') {
         const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${settings.api.model}:generateContent?key=${settings.api.key}`;
         
-        const geminiMessages = messages.map(m => ({
+        const geminiMessages = prunedMessages.map(m => ({
           role: m.role === 'npc' ? 'model' : 'user',
           parts: [{ text: m.content }]
         }));
@@ -706,6 +1056,16 @@ The following agents/characters are currently bound to the user and are silently
         timestamp: new Date().toISOString()
       };
       
+      aiLogs.unshift({
+        id: botMessage.id,
+        timestamp: botMessage.timestamp,
+        type: 'Hollow Chat',
+        model: settings.api.model || undefined,
+        prompt: systemPrompt + '\n\n[Messages]\n' + JSON.stringify(messages, null, 2),
+        response: replyContent
+      });
+      if (aiLogs.length > 50) aiLogs = aiLogs.slice(0, 50);
+
       res.json(botMessage);
 
     } catch (error: any) {
@@ -735,3 +1095,21 @@ The following agents/characters are currently bound to the user and are silently
 }
 
 startServer();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
