@@ -865,7 +865,6 @@ async function startServer() {
       if (dbSettings.summaryApi.key && dbSettings.summaryApi.key !== 'dummy') {
         let baseUrl = dbSettings.summaryApi.url.trim().replace(/\/+$/, '');
         if (!baseUrl.endsWith('/v1')) baseUrl += '/v1';
-        assertSafeOutboundUrl(`${baseUrl}/chat/completions`);
 
         const response = await fetch(`${baseUrl}/chat/completions`, {
           method: 'POST',
