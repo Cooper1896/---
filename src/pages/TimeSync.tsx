@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Github, Cloud, CloudUpload, CloudDownload, AlertCircle, CheckCircle2, RefreshCw, Key, ExternalLink } from 'lucide-react';
+import { api } from '../lib/api';
 
 export default function TimeSync() {
   const [token, setToken] = useState('');
@@ -9,30 +10,18 @@ export default function TimeSync() {
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
 
   useEffect(() => {
-    // Check if already bound
-    const savedToken = localStorage.getItem('github_sync_token');
-    if (savedToken) {
-      setToken(savedToken);
-      setIsBound(true);
-      const lastSync = localStorage.getItem('github_last_sync');
-      if (lastSync) setLastSyncTime(lastSync);
-    }
+    const lastSync = localStorage.getItem('github_last_sync');
+    if (lastSync) setLastSyncTime(lastSync);
   }, []);
 
   const handleBind = async () => {
-    if (!token.trim()) return;
+    const normalizedToken = token.trim();
+    if (!normalizedToken) return;
+
     setLoading(true);
     try {
-      // Test the token by fetching user info
-      const res = await fetch('https://api.github.com/user', {
-        headers: {
-          'Authorization': `token ${token}`,
-          'Accept': 'application/vnd.github.v3+json'
-        }
-      });
-      if (!res.ok) throw new Error('Invalid token');
-      
-      localStorage.setItem('github_sync_token', token);
+      await api.validateGitHubToken(normalizedToken);
+      setToken(normalizedToken);
       setIsBound(true);
     } catch (err) {
       alert('GitHub Token 验证失败，请检查 Token 是否有效。');
@@ -43,7 +32,6 @@ export default function TimeSync() {
 
   const handleUnbind = () => {
     if (confirm('确定要解除 GitHub 绑定吗？未同步的数据可能会丢失。')) {
-      localStorage.removeItem('github_sync_token');
       localStorage.removeItem('github_last_sync');
       setToken('');
       setIsBound(false);
@@ -52,18 +40,15 @@ export default function TimeSync() {
   };
 
   const handleSync = async (direction: 'up' | 'down') => {
+    const normalizedToken = token.trim();
+    if (!normalizedToken) {
+      alert('请先输入并验证 GitHub Token。');
+      return;
+    }
+
     setSyncStatus('syncing');
     try {
-      const res = await fetch(`/api/sync/${direction}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token })
-      });
-      const data = await res.json();
-      
-      if (!res.ok || data.error) {
-        throw new Error(data.error || 'Sync failed');
-      }
+      await api.syncData(direction, normalizedToken);
 
       setSyncStatus('success');
       const now = new Date().toLocaleString();

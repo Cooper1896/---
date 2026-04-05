@@ -9,6 +9,8 @@ import Home from './pages/Home';
 import InterKnot from './pages/InterKnot';
 import SettingsPage from './pages/Settings';
 import TimeSync from './pages/TimeSync';
+import HollowChat from './pages/HollowChat';
+import ProxyChat from './pages/ProxyChat';
 
 export default function App() {
   return (
@@ -20,6 +22,8 @@ export default function App() {
           <Route path="time-sync" element={<TimeSync />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
+        <Route path="/hollow" element={<HollowChat />} />
+        <Route path="/proxy" element={<ProxyChat />} />
       </Routes>
     </BrowserRouter>
   );

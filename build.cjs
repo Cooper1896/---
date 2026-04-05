@@ -1,7 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CheckCircle2, AlertCircle, Link2, Key, Globe, Eye, EyeOff, Puzzle, Download, Upload, Trash2, RefreshCw, Database, AlertTriangle } from 'lucide-react';
-import { api } from '../lib/api';
+import { CheckCircle2, AlertCircle, Link2, Key, Globe, Eye, EyeOff, Puzzle, Download, Trash2, RefreshCw, Database, AlertTriangle } from 'lucide-react';
 
 const Toggle = ({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) => (
   <div
@@ -13,7 +12,15 @@ const Toggle = ({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 );
 
 const TABS = [
+  { id: 'game', label: '代理人设定' },
   { id: 'tavern', label: '空洞预设' },
+  { id: 'world', label: '世界观设定' },
+  { id: 'memory', label: '记忆配置' },
+  { id: 'visual', label: '视觉显示' },
+  { id: 'npc', label: '目标管理' },
+  { id: 'vars', label: '变量管理' },
+  { id: 'bgm', label: '背景音乐' },
+  { id: 'history', label: '互动历史' },
   { id: 'db', label: '数据库管理' },
   { id: 'extensions', label: '插件管理' },
   { id: 'api', label: '接口连接' },
@@ -31,8 +38,6 @@ export default function SettingsPage() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectStatus, setConnectStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [connectMessage, setConnectMessage] = useState('');
-  const [isTesting, setIsTesting] = useState(false);
-  const [testResult, setTestResult] = useState({status: 'idle', message: ''});
   const [showKey, setShowKey] = useState(false);
 
   // Character Management State
@@ -58,8 +63,6 @@ export default function SettingsPage() {
   const [vectorDb, setVectorDb] = useState<any[]>([]);
   const [vectorModels, setVectorModels] = useState<string[]>([]);
   const [summaryModels, setSummaryModels] = useState<string[]>([]);
-  const [testingDb, setTestingDb] = useState<string | null>(null);
-  const [dbTestResult, setDbTestResult] = useState<{type: string | null, status: 'idle' | 'success' | 'error', message: string}>({type: null, status: 'idle', message: ''});
 
   const navigate = useNavigate();
 
@@ -90,23 +93,18 @@ export default function SettingsPage() {
   }, []);
 
   const updateSetting = (category: string, key: string, value: any) => {
-    setSettings((prev: any) => {
-      const newSettings = {
-        ...prev,
-        [category]: {
-          ...prev[category],
-          [key]: value
-        }
-      };
-      if ((window as any)._settingUpdateTimer) clearTimeout((window as any)._settingUpdateTimer);
-      (window as any)._settingUpdateTimer = setTimeout(() => {
-        fetch('/api/settings', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newSettings)
-        }).catch(console.error);
-      }, 150);
-      return newSettings;
+    const newSettings = {
+      ...settings,
+      [category]: {
+        ...settings[category],
+        [key]: value
+      }
+    };
+    setSettings(newSettings);
+    fetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newSettings)
     });
   };
 
@@ -120,33 +118,7 @@ export default function SettingsPage() {
     });
   };
 
-
-  const handleTestConnection = async () => {
-    setIsTesting(true);
-    setTestResult({ status: 'idle', message: '' });
-    try {
-      const res = await fetch('/api/models', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          provider: settings.api.provider,
-          url: settings.api.url,
-          key: settings.api.key
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || '连接失败');
-
-      setTestResult({ status: 'success', message: '测试成功：已成功连接到当前 API！可以获取模型。' });
-    } catch (err) {
-      setTestResult({ status: 'error', message: err.message || '连接错误' });
-    } finally {
-      setIsTesting(false);
-    }
-  };
-
   const handleConnect = async () => {
-
     setIsConnecting(true);
     setConnectStatus('idle');
     setConnectMessage('');
@@ -276,126 +248,6 @@ export default function SettingsPage() {
     }
   };
 
-  
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleImportClick = () => fileInputRef.current?.click();
-
-  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    
-    try {
-      if (tavernTab === 'characters') {
-        let jsonPayload: any = null;
-        let avatarBase64: string | undefined = undefined;
-
-        if (file.name.endsWith('.json')) {
-          const text = await file.text();
-          jsonPayload = JSON.parse(text);
-        } else if (file.name.endsWith('.png') || file.name.endsWith('.webp')) {
-          const buffer = await file.arrayBuffer();
-          const bytes = new Uint8Array(buffer);
-          let binary = '';
-          for (let i = 0; i < bytes.byteLength; i++) {
-            binary += String.fromCharCode(bytes[i]);
-          }
-          avatarBase64 = 'data:' + file.type + ';base64,' + btoa(binary);
-
-          if (file.name.endsWith('.png')) {
-            const dataView = new DataView(buffer);
-            let offset = 8;
-            while (offset < dataView.byteLength) {
-              const length = dataView.getUint32(offset);
-              const typeStr = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]);
-              if (typeStr === 'tEXt' || typeStr === 'iTXt') {
-                const chunkData = bytes.subarray(offset + 8, offset + 8 + length);
-                let nullIdx = chunkData.indexOf(0);
-                const keyword = new TextDecoder('ascii').decode(chunkData.subarray(0, nullIdx));
-                
-                if (keyword === 'chara') {
-                  let charaText = new TextDecoder('utf-8').decode(chunkData.subarray(nullIdx + 1));
-                  if (typeStr === 'iTXt') {
-                     let start = nullIdx + 3; 
-                     start = chunkData.indexOf(0, start) + 1;
-                     start = chunkData.indexOf(0, start) + 1;
-                     charaText = new TextDecoder('utf-8').decode(chunkData.subarray(start));
-                  }
-                  
-                  try {
-                     const decodedStr = atob(charaText.trim());
-                     const strBytes = new Uint8Array(decodedStr.length);
-                     for(let i=0;i<decodedStr.length;i++) strBytes[i] = decodedStr.charCodeAt(i);
-                     const finalStr = new TextDecoder('utf-8').decode(strBytes);
-                     jsonPayload = JSON.parse(finalStr);
-                     break;
-                  } catch (e) {
-                     // try direct
-                     jsonPayload = JSON.parse(decodeURIComponent(escape(atob(charaText.trim()))));
-                     break;
-                  }
-                }
-              }
-              offset += length + 12;
-            }
-          }
-        }
-        
-        if (jsonPayload) {
-          const data = jsonPayload.data || jsonPayload;
-          const newChar = {
-            name: data.name || '未知导入角色',
-            description: data.description || '',
-            personality: data.personality || '',
-            firstMessage: data.first_mes || data.firstMessage || '你好。',
-            mesExample: data.mes_example || data.mesExample || '',
-            avatar: avatarBase64,
-          };
-          const res = await fetch('/api/characters', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(newChar)
-          });
-          const inserted = await res.json();
-          setCharacters((prev: any) => [...prev, inserted]);
-          handleEditChar(inserted);
-          alert('角色导入成功！');
-        } else {
-          alert('无法解析角色卡数据，请确认是否为 V2 格式 JSON/PNG。如果使用 WebP 请导入 JSON 格式数据。');
-        }
-
-      } else {
-        const text = await file.text();
-        const json = JSON.parse(text);
-        const entries = json.entries ? Object.values(json.entries) : (Array.isArray(json) ? json : [json]);
-        
-        let count = 0;
-        for (const entry of entries as any[]) {
-          let ks = entry.keys || entry.keyword || [];
-          if (typeof ks === 'string') ks = ks.split(',').map((s: string) => s.trim());
-          const cont = entry.content || entry.constant || '';
-          
-          if (ks.length || cont) {
-             const res = await fetch('/api/lorebooks', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ keys: ks.join(', '), content: cont, constant: !!entry.constant })
-            });
-            const inserted = await res.json();
-            setLorebooks((prev: any) => [...prev, inserted]);
-            count++;
-          }
-        }
-        alert('成功导入 ' + count + ' 条世界书记录！');
-      }
-    } catch(err) {
-      console.error(err);
-      alert('导入失败：' + String(err));
-    }
-    
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-
   const handleAddLore = async () => {
     try {
       const res = await fetch('/api/lorebooks', {
@@ -426,7 +278,8 @@ export default function SettingsPage() {
   const fetchRepo = async () => {
     setRepoLoading(true);
     try {
-      const data = await api.getExtensionsRepo(repoUrl);
+      const res = await fetch('/api/extensions/repo');
+      const data = await res.json();
       setRepoExtensions(data);
     } catch (err) {
       console.error('Failed to fetch repo:', err);
@@ -479,21 +332,20 @@ export default function SettingsPage() {
 
   // Database Functions
   const updateDbSetting = async (type: 'vectorApi' | 'summaryApi', key: string, value: any) => {
-    setDbSettings((prev: any) => {
-      const newSettings = {
-        ...prev,
-        [type]: { ...prev[type], [key]: value }
-      };
-      if ((window as any)._dbUpdateTimer) clearTimeout((window as any)._dbUpdateTimer);
-      (window as any)._dbUpdateTimer = setTimeout(() => {
-        fetch('/api/db/settings', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newSettings)
-        }).catch(err => console.error('Failed to save db settings:', err));
-      }, 150);
-      return newSettings;
-    });
+    const newSettings = {
+      ...dbSettings,
+      [type]: { ...dbSettings[type], [key]: value }
+    };
+    setDbSettings(newSettings);
+    try {
+      await fetch('/api/db/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newSettings)
+      });
+    } catch (err) {
+      console.error('Failed to update DB settings:', err);
+    }
   };
 
   const handleDeleteSummary = async (id: string) => {
@@ -511,39 +363,6 @@ export default function SettingsPage() {
       setVectorDb(prev => prev.filter(v => v.id !== id));
     } catch (err) {
       console.error('Failed to delete vector entry:', err);
-    }
-  };
-
-  const handleTestDbConnection = async (type: 'vectorApi' | 'summaryApi') => {
-    const config = dbSettings?.[type];
-    if (!config?.url || !config?.key) {
-      setDbTestResult({ type, status: 'error', message: '请先填写 API URL 和 API Key' });
-      return;
-    }
-
-    setTestingDb(type);
-    setDbTestResult({ type, status: 'idle', message: '' });
-
-    try {
-      const res = await fetch('/api/models', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          provider: 'OpenAI', // 默认使用 OpenAI 兼容格式获取
-          url: config.url,
-          key: config.key
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || '连接失败');
-
-      setDbTestResult({ type, status: 'success', message: '测试成功：已成功连接到当前 API！模型及状态可用。' });
-      if (type === 'vectorApi') setVectorModels(data);
-      else setSummaryModels(data);
-    } catch (err: any) {
-      setDbTestResult({ type, status: 'error', message: err.message || '连接错误' });
-    } finally {
-      setTestingDb(null);
     }
   };
 
@@ -604,11 +423,7 @@ export default function SettingsPage() {
         <div className="w-1/3 bg-[#1c1b1b] border border-[#353535] rounded-sm flex flex-col">
           <div className="p-4 border-b border-[#353535] flex justify-between items-center">
             <h4 className="text-white font-bold text-sm">{tavernTab === 'characters' ? '角色列表' : '词条列表'}</h4>
-            <input type="file" ref={fileInputRef} onChange={handleImportFile} accept={tavernTab === 'characters' ? ".json,.png,.webp" : ".json"} className="hidden" />
-              <div className="flex gap-4">
-                <button onClick={handleImportClick} className="text-[#959177] hover:text-white text-xs font-bold flex items-center gap-1"><Upload className="w-3 h-3" /> 导入V2</button>
-                <button onClick={tavernTab === 'characters' ? handleAddChar : handleAddLore} className="text-[#00DAF3] hover:text-white text-xs font-bold">+ 新建</button>
-              </div>
+            <button onClick={tavernTab === 'characters' ? handleAddChar : handleAddLore} className="text-[#00DAF3] hover:text-white text-xs font-bold">+ 新建</button>
           </div>
           <div className="flex-1 overflow-y-auto custom-scrollbar p-2">
             {tavernTab === 'characters' ? (
@@ -767,61 +582,14 @@ export default function SettingsPage() {
       <h3 className="text-2xl font-black text-[#FA5C1C] font-headline mb-2">接口配置中心</h3>
       <p className="text-xs text-[#959177] mb-8 border-b border-[#353535] pb-4">配置主剧情模型与接口连接。支持 OpenAI 兼容格式与原生 Gemini。</p>
 
-                      <div className="bg-[#1c1b1b] border border-[#353535] p-6 rounded-sm mb-6">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 gap-4">
-            <div className="flex items-center gap-2">
-              <Link2 className="w-5 h-5 text-[#FA5C1C]" />
-              <h4 className="text-lg font-bold text-white">连接设置</h4>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {settings?.api?.savedPreset && (
-                <button
-                  onClick={() => {
-                    const saved = settings.api.savedPreset;
-                    updateSetting("api", "provider", saved.provider);
-                    updateSetting("api", "url", saved.url);
-                    updateSetting("api", "key", saved.key);
-                    updateSetting("api", "model", saved.model || "");
-                    if(dbSettings) {
-                      updateDbSetting("summaryApi", "url", saved.url);
-                      updateDbSetting("summaryApi", "key", saved.key);
-                      updateDbSetting("vectorApi", "url", saved.url);
-                      updateDbSetting("vectorApi", "key", saved.key);
-                    }
-                    alert("已加载覆盖槽位配置！");
-                  }}
-                  className="text-xs px-3 py-1.5 focus:outline-none bg-[#2a2a2a] hover:bg-[#353535] text-[#FA5C1C] border border-[#454545] transition-colors"
-                >
-                  加载配置槽
-                </button>
-               )}
-               <button
-                 onClick={() => {
-                   const saved = { provider: settings.api.provider, url: settings.api.url, key: settings.api.key, model: settings.api.model };
-                   updateSetting("api", "savedPreset", saved);
-                   alert("API 配置已保存此覆盖槽位。");
-                 }}
-                 className="text-xs px-3 py-1.5 focus:outline-none bg-[#2a2a2a] hover:bg-[#353535] text-[#00DAF3] border border-[#454545] transition-colors"
-               >
-                 保存当前配置
-               </button>
-               <button
-                 onClick={handleTestConnection}
-                 disabled={isTesting}
-                 className="text-xs px-3 py-1.5 focus:outline-none bg-[#2a2a2a] hover:bg-[#353535] text-[#FA5C1C] border border-[#454545] transition-colors flex items-center gap-1 disabled:opacity-50"
-               >
-                 {isTesting ? "测试中..." : "测试连接"}
-               </button>
-            </div>
-          </div>
-          {testResult && testResult.status !== "idle" && (
-            <div className={`text-xs mb-4 text-right ${testResult.status === "success" ? "text-green-400" : "text-red-400"}`}>
-              {testResult.message}
-            </div>
-          )}
+      <div className="bg-[#1c1b1b] border border-[#353535] p-6 rounded-sm mb-6">
+        <div className="flex items-center gap-2 mb-6">
+          <Link2 className="w-5 h-5 text-[#FA5C1C]" />
+          <h4 className="text-lg font-bold text-white">连接设置</h4>
+        </div>
 
-          <div className="space-y-6">
-            <div>
+        <div className="space-y-6">
+          <div>
             <label className="block text-xs text-[#00DAF3] font-bold mb-2">API 供应商 (API Provider)</label>
             <select 
               className="w-full bg-[#131313] border border-[#353535] text-white p-2.5 text-sm focus:border-[#00DAF3] outline-none"
@@ -1171,36 +939,12 @@ export default function SettingsPage() {
             </div>
             
             <div className="bg-[#131313] p-4 border border-[#353535] rounded-sm">
-              <div className="flex gap-2 mb-4">
-                <button 
-                  onClick={() => handleTestDbConnection('vectorApi')}
-                  disabled={testingDb === 'vectorApi'}
-                  className="flex-1 bg-[#1c1b1b] text-[#00DAF3] border border-[#00DAF3]/30 p-2 text-sm hover:bg-[#00DAF3]/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {testingDb === 'vectorApi' ? (
-                    <span className="flex items-center justify-center gap-2"><RefreshCw className="w-4 h-4 animate-spin" /> 测试中...</span>
-                  ) : (
-                    <span className="flex items-center justify-center gap-2" title="测试此数据库连接"><Link2 className="w-4 h-4" /> 测试连接</span>
-                  )}
-                </button>
-                <button 
-                  onClick={() => handleAutoFetchDb('vectorApi')}
-                  className="flex-1 bg-[#2a2a2a] text-[#e5e2e1] p-2 text-sm hover:bg-[#353535] transition-colors border border-[#454545]"
-                >
-                  加载模型列表
-                </button>
-              </div>
-
-              {dbTestResult.type === 'vectorApi' && dbTestResult.status !== 'idle' && (
-                <div className={`p-3 mb-4 rounded-sm flex items-start gap-2 ${
-                  dbTestResult.status === 'success' 
-                    ? 'bg-[#1a2e1d] border border-[#4caf50]/30 text-[#4caf50]' 
-                    : 'bg-[#2a1313] border border-red-500/30 text-red-400'
-                }`}>
-                   {dbTestResult.status === 'success' ? <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" /> : <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />}
-                   <span className="text-sm">{dbTestResult.message}</span>
-                </div>
-              )}
+              <button 
+                onClick={() => handleAutoFetchDb('vectorApi')}
+                className="w-full bg-[#2a2a2a] text-[#e5e2e1] p-2 text-sm hover:bg-[#353535] transition-colors border border-[#454545] mb-4"
+              >
+                加载模型列表
+              </button>
 
               <div className="mb-4">
                 <label className="block text-xs text-[#959177] mb-2">模型名称 (手动输入):</label>
@@ -1283,36 +1027,12 @@ export default function SettingsPage() {
             </div>
             
             <div className="bg-[#131313] p-4 border border-[#353535] rounded-sm">
-              <div className="flex gap-2 mb-4">
-                <button 
-                  onClick={() => handleTestDbConnection('summaryApi')}
-                  disabled={testingDb === 'summaryApi'}
-                  className="flex-1 bg-[#1c1b1b] text-[#00DAF3] border border-[#00DAF3]/30 p-2 text-sm hover:bg-[#00DAF3]/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {testingDb === 'summaryApi' ? (
-                    <span className="flex items-center justify-center gap-2"><RefreshCw className="w-4 h-4 animate-spin" /> 测试中...</span>
-                  ) : (
-                    <span className="flex items-center justify-center gap-2" title="测试此数据库连接"><Link2 className="w-4 h-4" /> 测试连接</span>
-                  )}
-                </button>
-                <button 
-                  onClick={() => handleAutoFetchDb('summaryApi')}
-                  className="flex-1 bg-[#2a2a2a] text-[#e5e2e1] p-2 text-sm hover:bg-[#353535] transition-colors border border-[#454545]"
-                >
-                  加载模型列表
-                </button>
-              </div>
-
-              {dbTestResult.type === 'summaryApi' && dbTestResult.status !== 'idle' && (
-                <div className={`p-3 mb-4 rounded-sm flex items-start gap-2 ${
-                  dbTestResult.status === 'success' 
-                    ? 'bg-[#1a2e1d] border border-[#4caf50]/30 text-[#4caf50]' 
-                    : 'bg-[#2a1313] border border-red-500/30 text-red-400'
-                }`}>
-                   {dbTestResult.status === 'success' ? <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" /> : <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />}
-                   <span className="text-sm">{dbTestResult.message}</span>
-                </div>
-              )}
+              <button 
+                onClick={() => handleAutoFetchDb('summaryApi')}
+                className="w-full bg-[#2a2a2a] text-[#e5e2e1] p-2 text-sm hover:bg-[#353535] transition-colors border border-[#454545] mb-4"
+              >
+                加载模型列表
+              </button>
 
               <div className="mb-4">
                 <label className="block text-xs text-[#959177] mb-2">模型名称 (手动输入):</label>

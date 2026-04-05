@@ -4,6 +4,15 @@
 
 # Run and deploy your AI Studio app
 
+## Project Foundation
+
+This repo now treats the Zenless Tavern direction as the source of truth for future work.
+
+- Project charter: [docs/project-charter.md](docs/project-charter.md)
+- Page playbook: [docs/page-playbook.md](docs/page-playbook.md)
+
+Before adding or redesigning pages, follow those two documents so the layout, style, architecture, and maintenance approach stay consistent.
+
 This contains everything you need to run your app locally.
 
 View your app in AI Studio: https://ai.studio/apps/ee67e336-326f-4670-bd01-c20f10aec715
