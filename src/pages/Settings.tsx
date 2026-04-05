@@ -350,6 +350,14 @@ export default function SettingsPage() {
             firstMessage: data.first_mes || data.firstMessage || '你好。',
             mesExample: data.mes_example || data.mesExample || '',
             avatar: avatarBase64,
+            scenario: data.scenario || '',
+            creator_notes: data.creator_notes || data.creatorcomment || '',
+            system_prompt: data.system_prompt || '',
+            post_history_instructions: data.post_history_instructions || '',
+            tags: data.tags || [],
+            creator: data.creator || '',
+            character_version: data.character_version || '',
+            alternate_greetings: data.alternate_greetings || []
           };
           const res = await fetch('/api/characters', {
             method: 'POST',
@@ -367,26 +375,17 @@ export default function SettingsPage() {
       } else {
         const text = await file.text();
         const json = JSON.parse(text);
-        const entries = json.entries ? Object.values(json.entries) : (Array.isArray(json) ? json : [json]);
         
-        let count = 0;
-        for (const entry of entries as any[]) {
-          let ks = entry.keys || entry.keyword || [];
-          if (typeof ks === 'string') ks = ks.split(',').map((s: string) => s.trim());
-          const cont = entry.content || entry.constant || '';
-          
-          if (ks.length || cont) {
-             const res = await fetch('/api/lorebooks', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ keys: ks.join(', '), content: cont, constant: !!entry.constant })
-            });
-            const inserted = await res.json();
-            setLorebooks((prev: any) => [...prev, inserted]);
-            count++;
-          }
-        }
-        alert('成功导入 ' + count + ' 条世界书记录！');
+        let payloadEntries = json.entries ? Object.values(json.entries) : (Array.isArray(json) ? json : [json]);
+        const payload = { entries: payloadEntries };
+        const res = await fetch('/api/lorebooks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const inserted = await res.json();
+        setLorebooks((prev: any) => [...prev, inserted]);
+        alert('成功导入世界书！');
       }
     } catch(err) {
       console.error(err);
