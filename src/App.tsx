@@ -5,12 +5,12 @@
 
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Layout from './components/Layout';
-import Home from './pages/Home';
-import InterKnot from './pages/InterKnot';
-import SettingsPage from './pages/Settings';
-import TimeSync from './pages/TimeSync';
-import HollowChat from './pages/HollowChat';
-import ProxyChat from './pages/ProxyChat';
+import { Home } from './features/home';
+import { InterKnot } from './features/inter-knot';
+import { Settings as SettingsPage } from './features/settings';
+import { TimeSync } from './features/time-sync';
+import { HollowChat } from './features/hollow-chat';
+import { ProxyChat } from './features/proxy-chat';
 
 export default function App() {
   return (
