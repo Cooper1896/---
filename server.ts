@@ -293,6 +293,23 @@ function isPrivateIpv4(ip: string): boolean {
   return false;
 }
 
+function assertSafeOutboundUrl(rawUrl: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new HttpError(400, "Invalid URL");
+  }
+
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new HttpError(400, "Only HTTP(S) URLs are allowed");
+  }
+
+  if (isBlockedRemoteHost(parsed.hostname)) {
+    throw new HttpError(400, "Target host is blocked for security reasons");
+  }
+}
+
 function isBlockedRemoteHost(hostname: string): boolean {
   const normalized = hostname.toLowerCase().trim();
 
@@ -848,6 +865,7 @@ async function startServer() {
       if (dbSettings.summaryApi.key && dbSettings.summaryApi.key !== 'dummy') {
         let baseUrl = dbSettings.summaryApi.url.trim().replace(/\/+$/, '');
         if (!baseUrl.endsWith('/v1')) baseUrl += '/v1';
+        assertSafeOutboundUrl(`${baseUrl}/chat/completions`);
 
         const response = await fetch(`${baseUrl}/chat/completions`, {
           method: 'POST',
@@ -1002,6 +1020,10 @@ async function startServer() {
         if (!baseUrl.endsWith('/v1')) baseUrl += '/v1';
         const endpoint = baseUrl + '/models';
 
+        if (provider === 'OpenAI') {
+          assertSafeOutboundUrl(endpoint);
+        }
+
         const headers: Record<string, string> = {};
         if (key?.trim()) {
           headers.Authorization = `Bearer ${key}`;
@@ -1061,6 +1083,10 @@ async function startServer() {
         baseUrl = baseUrl.replace(/\/+$/, '');
         if (!baseUrl.endsWith('/v1')) baseUrl += '/v1';
         const endpoint = baseUrl + '/chat/completions';
+
+        if (provider === 'OpenAI') {
+          assertSafeOutboundUrl(endpoint);
+        }
 
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
@@ -1247,7 +1273,8 @@ async function startServer() {
       
       const headers = {
         'Authorization': `token ${token}`,
-        'Accept': 'application/vnd.github.v3+json'
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json',
       };
 
       const gistId = await findSyncGistId(headers);
@@ -1311,7 +1338,7 @@ async function startServer() {
       if (parsedData.lorebooks) lorebooks = parsedData.lorebooks as Lorebook[];
       if (parsedData.interKnotHistories) interKnotHistories = parsedData.interKnotHistories;
       if (parsedData.hollowHistory) hollowHistory = parsedData.hollowHistory;
-      if (parsedData.chatHistories) interKnotHistories = parsedData.chatHistories; // Backward compatibility
+      if (!parsedData.interKnotHistories && parsedData.chatHistories) interKnotHistories = parsedData.chatHistories; // Backward compatibility
       if (parsedData.proxyScenarios) proxyScenarios = parsedData.proxyScenarios;
       if (parsedData.settings) {
         const incomingSettings: AppSettings = {
@@ -1444,6 +1471,10 @@ async function startServer() {
       baseUrl = baseUrl.replace(/\/+$/, "");
       if (!baseUrl.endsWith("/v1")) baseUrl += "/v1";
       const endpoint = baseUrl + "/chat/completions";
+
+      if (settings.api.provider === "OpenAI") {
+        assertSafeOutboundUrl(endpoint);
+      }
 
       const apiMessages = [
         { role: "system", content: systemPrompt },
@@ -1650,6 +1681,10 @@ The following agents/characters are currently bound to the user and are silently
       if (settings.api.provider === 'OpenAI' || settings.api.provider === 'Custom') {
         let baseUrl = settings.api.url || 'https://api.openai.com';
         baseUrl = baseUrl.replace(/\/+$/, ''); if (!baseUrl.endsWith('/v1')) baseUrl += '/v1'; const endpoint = baseUrl + '/chat/completions';
+
+        if (settings.api.provider === 'OpenAI') {
+          assertSafeOutboundUrl(endpoint);
+        }
 
         const apiMessages = [
           { role: 'system', content: systemPrompt },
