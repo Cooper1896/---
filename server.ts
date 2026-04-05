@@ -12,8 +12,9 @@ import type {
   SettingsBootstrap,
   SummaryEntry,
   Theme,
+  ThemePayload,
   VectorEntry,
-} from "./src/shared/contracts";
+} from "./server-types";
 
 async function startServer() {
   const app = express();
@@ -364,11 +365,11 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  const themes: Theme[] = [
-    { id: 'zzz-default', name: 'ZZZ Default', description: 'Neon Hacker', colors: ['#131313', '#00DAF3', '#FFF000', '#1c1b1b'] },
-    { id: 'belobog', name: 'Belobog Heavy Industries', description: 'Industrial', colors: ['#1a1a1a', '#2a2a2a', '#d4af37', '#252525'] },
-    { id: 'victoria', name: 'Victoria Housekeeping', description: 'Elegant Maid', colors: ['#2c1836', '#4a154b', '#f5e6e8', '#381f45'] },
-    { id: 'gentle-house', name: 'Cunning Hares', description: 'Street Style', colors: ['#1f2937', '#10b981', '#f3f4f6', '#111827'] }
+  const themes: ThemePayload[] = [
+    { id: 'zzz-default', name: 'ZZZ Default', description: 'Neon Hacker', desc: 'Neon Hacker', colors: ['#131313', '#00DAF3', '#FFF000', '#1c1b1b'] },
+    { id: 'belobog', name: 'Belobog Heavy Industries', description: 'Industrial', desc: 'Industrial', colors: ['#1a1a1a', '#2a2a2a', '#d4af37', '#252525'] },
+    { id: 'victoria', name: 'Victoria Housekeeping', description: 'Elegant Maid', desc: 'Elegant Maid', colors: ['#2c1836', '#4a154b', '#f5e6e8', '#381f45'] },
+    { id: 'gentle-house', name: 'Cunning Hares', description: 'Street Style', desc: 'Street Style', colors: ['#1f2937', '#10b981', '#f3f4f6', '#111827'] }
   ];
 
   app.get("/api/settings/bootstrap", (req, res) => {
