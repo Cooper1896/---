@@ -1433,84 +1433,105 @@ async function startServer() {
     let replyContent = "";
 
     // --- PROMPT BUILDER ENGINE ---
-    const recentText = messages
-      .slice(-5)
-      .map((m: ChatMessage) => m.content)
-      .join("\n");
-      
     const allEntries = lorebooks.flatMap(lorebook => lorebook.entries || []);
     const activeLorebooks = allEntries.filter(lore => {
       if (lore.constant) return true;
       if (!lore.keys || !Array.isArray(lore.keys) || lore.keys.length === 0) return false;
 
-      const matches = lore.keys.map((key: string) => {
+      const searchRange = lore.search_range && lore.search_range > 0 ? lore.search_range : 5;
+      const recentTextForLore = messages
+        .slice(-searchRange)
+        .map((m: ChatMessage) => m.content)
+        .join("\n");
+
+      const checkMatch = (key: string) => {
         if (!key) return false;
         if (lore.regex_matching) {
           try {
             const regex = new RegExp(key, 'i');
-            return regex.test(recentText);
+            return regex.test(recentTextForLore);
           } catch {
             return false;
           }
         }
-        return recentText.toLowerCase().includes(key.toLowerCase());
-      });
+        return recentTextForLore.toLowerCase().includes(key.toLowerCase());
+      };
 
-      if (lore.keyword_logic === 'AND') return matches.every(Boolean);
-      if (lore.keyword_logic === 'NOT') return !matches.some(Boolean);
-      return matches.some(Boolean); // ANY
-    }).sort((a, b) => (a.insertion_order ?? 50) - (b.insertion_order ?? 50));
+      const matches = lore.keys.map(checkMatch);
+
+      let keyConditionMet = false;
+      if (lore.keyword_logic === 'AND') keyConditionMet = matches.every(Boolean);
+      else if (lore.keyword_logic === 'NOT') keyConditionMet = !matches.some(Boolean);
+      else keyConditionMet = matches.some(Boolean); // ANY
+
+      if (!keyConditionMet) return false;
+
+      // Check secondary keys if they exist
+      if (lore.secondary_keys && Array.isArray(lore.secondary_keys) && lore.secondary_keys.length > 0) {
+        const secondaryMatches = lore.secondary_keys.map(checkMatch);
+        return secondaryMatches.some(Boolean); // Usually secondary keys are ANY logic
+      }
+
+      return true;
+    }).sort((a, b) => (b.insertion_order ?? 50) - (a.insertion_order ?? 50)); // Descending so higher priority gets processed first/closer to bottom
+
+    const replaceTokens = (text: string) => {
+      return text
+        .replace(/{{char}}/gi, char.name)
+        .replace(/{{user}}/gi, "User"); // Replace with actual user name if available
+    };
 
     let systemPrompt = char.system_prompt
-      ? char.system_prompt + "\n\n"
+      ? replaceTokens(char.system_prompt) + "\n\n"
       : `[System Note: You are engaging in a private 1-on-1 text-based roleplay (Agent Network). You must strictly stay in character as ${char.name}. This is a focused scenario with the user. Other characters may appear briefly to drive the plot, but they are not the main focus. Use asterisks for *actions and expressions* and quotes for "speech". Do not break character or refer to yourself as an AI.]\n\n`;
 
-    systemPrompt += `[Character Identity: ${char.name}]\n${char.description || ""}\n\n`;
+    systemPrompt += `[Character Identity: ${char.name}]\n${replaceTokens(char.description || "")}\n\n`;
 
     if (char.personality) {
-      systemPrompt += `[Personality Traits]\n${char.personality}\n\n`;
+      systemPrompt += `[Personality Traits]\n${replaceTokens(char.personality)}\n\n`;
     }
 
     const scenarioText = scenario?.trim();
     if (scenarioText) {
-      systemPrompt += `[Current Scenario]\n${scenarioText}\n\n`;
+      systemPrompt += `[Current Scenario]\n${replaceTokens(scenarioText)}\n\n`;
     }
 
     const promptLorebooks = activeLorebooks.filter(l => !l.position || l.position === 'top_of_prompt' || l.position === 'before_char');
     if (promptLorebooks.length > 0) {
       systemPrompt += `[World Info / Lorebook]\n`;
-      promptLorebooks.forEach(lore => {
-        systemPrompt += `- ${lore.content}\n`;
+      // Reverse because we want highest priority (which are sorted first) to end up at the bottom of the block
+      promptLorebooks.reverse().forEach(lore => {
+        systemPrompt += `- ${replaceTokens(lore.content)}\n`;
       });
       systemPrompt += `\n`;
     }
 
     if (char.mes_example) {
-      systemPrompt += `[Dialogue Examples]\n${char.mes_example}\n\n`;
+      systemPrompt += `[Dialogue Examples]\n${replaceTokens(char.mes_example)}\n\n`;
     }
 
     if (settings.api.global_system_prompt) {
-      systemPrompt += "\n[Global System Prompt]\n" + settings.api.global_system_prompt + "\n\n";
+      systemPrompt += "\n[Global System Prompt]\n" + replaceTokens(settings.api.global_system_prompt) + "\n\n";
     }
 
     if (settings.api.main_prompt) {
-      systemPrompt += "\n[Main Prompt]\n" + settings.api.main_prompt + "\n\n";
+      systemPrompt += "\n[Main Prompt]\n" + replaceTokens(settings.api.main_prompt) + "\n\n";
     }
 
     if (settings.api.global_system_prompt) {
-      systemPrompt += "\n[Global System Prompt]\n" + settings.api.global_system_prompt + "\n\n";
+      systemPrompt += "\n[Global System Prompt]\n" + replaceTokens(settings.api.global_system_prompt) + "\n\n";
     }
 
     if (settings.api.main_prompt) {
-      systemPrompt += "\n[Main Prompt]\n" + settings.api.main_prompt + "\n\n";
+      systemPrompt += "\n[Main Prompt]\n" + replaceTokens(settings.api.main_prompt) + "\n\n";
     }
 
     if (settings.api.jailbreakPrompt) {
-      systemPrompt += "\n[System Override / Jailbreak]\n" + settings.api.jailbreakPrompt + "\n\n";
+      systemPrompt += "\n[System Override / Jailbreak]\n" + replaceTokens(settings.api.jailbreakPrompt) + "\n\n";
     }
 
     if (settings.api.instruct_mode_format) {
-      systemPrompt += "\n[Instruct Mode Format]\n" + settings.api.instruct_mode_format + "\n\n";
+      systemPrompt += "\n[Instruct Mode Format]\n" + replaceTokens(settings.api.instruct_mode_format) + "\n\n";
     }
 
     if (settings.api.nsfw_toggle !== undefined && !settings.api.nsfw_toggle) {
@@ -1518,7 +1539,7 @@ async function startServer() {
     }
 
     if (settings.api.instruct_mode_format) {
-      systemPrompt += "\n[Instruct Mode Format]\n" + settings.api.instruct_mode_format + "\n\n";
+      systemPrompt += "\n[Instruct Mode Format]\n" + replaceTokens(settings.api.instruct_mode_format) + "\n\n";
     }
 
     if (settings.api.nsfw_toggle !== undefined && !settings.api.nsfw_toggle) {
@@ -1529,26 +1550,32 @@ async function startServer() {
     if (summaryDb && summaryDb.length > 0) {
       systemPrompt += "<|背景世界记忆/总结|>\n";
       summaryDb.slice(-3).forEach(summ => {
-        systemPrompt += "- " + summ.content + "\n";
+        systemPrompt += "- " + replaceTokens(summ.content) + "\n";
       });
       systemPrompt += "</背景世界记忆/总结>\n\n";
     }
 
     // --- CONTEXT PRUNING ---
-    const maxContextChars = (Number(settings.api.context_size) || 4096) * 2.5;
-    let currentLength = systemPrompt.length;
+    const getTokenCount = (text: string) => {
+      // Rough estimation: 1 token ≈ 4 chars for English, might be different for Chinese.
+      // A slightly safer approximation for mixed content is dividing length by 3.
+      return Math.ceil(text.length / 3);
+    };
+
+    const maxContextTokens = Number(settings.api.context_size) || 4096;
+    let currentTokens = getTokenCount(systemPrompt);
     const prunedMessages: ChatMessage[] = [];
     
     // Add post-history instructions length to tracking if present
     if (char.post_history_instructions) {
-      currentLength += char.post_history_instructions.length;
+      currentTokens += getTokenCount(replaceTokens(char.post_history_instructions));
     }
 
     for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const msgLen = messages[i].content.length;
-      if (currentLength + msgLen > maxContextChars && prunedMessages.length > 0) break;
+      const msgTokens = getTokenCount(messages[i].content);
+      if (currentTokens + msgTokens > maxContextTokens && prunedMessages.length > 0) break;
       prunedMessages.unshift(messages[i]);
-      currentLength += msgLen;
+      currentTokens += msgTokens;
     }
     
     // Append post_history_instructions and bottom lorebooks
@@ -1556,14 +1583,15 @@ async function startServer() {
     let bottomContent = "";
     if (bottomLorebooks.length > 0) {
       bottomContent += `[World Info / Lorebook (Bottom)]\n`;
-      bottomLorebooks.forEach(lore => {
-        bottomContent += `- ${lore.content}\n`;
+      // Reverse because we want highest priority (which are sorted first) to end up at the bottom of the block
+      bottomLorebooks.reverse().forEach(lore => {
+        bottomContent += `- ${replaceTokens(lore.content)}\n`;
       });
       bottomContent += `\n`;
     }
 
     if (char.post_history_instructions) {
-      bottomContent += `\n[System Note]\n${char.post_history_instructions}`;
+      bottomContent += `\n[System Note]\n${replaceTokens(char.post_history_instructions)}`;
     }
 
     if (bottomContent) {
@@ -1865,28 +1893,47 @@ async function startServer() {
       let replyContent = '';
       
       // --- PROMPT BUILDER ENGINE ---
-      const recentText = messages.slice(-5).map((m: any) => m.content).join('\n');
-      const activeLorebooks = lorebooks.filter(lore => {
+      const allHollowEntries = lorebooks.flatMap(lorebook => lorebook.entries || []);
+      const activeLorebooks = allHollowEntries.filter(lore => {
         if (lore.constant) return true;
         if (!lore.keys || !Array.isArray(lore.keys) || lore.keys.length === 0) return false;
 
-        const matches = lore.keys.map((key: string) => {
+        const searchRange = lore.search_range && lore.search_range > 0 ? lore.search_range : 5;
+        const recentTextForLore = messages
+          .slice(-searchRange)
+          .map((m: any) => m.content)
+          .join('\n');
+
+        const checkMatch = (key: string) => {
           if (!key) return false;
           if (lore.regex_matching) {
             try {
               const regex = new RegExp(key, 'i');
-              return regex.test(recentText);
+              return regex.test(recentTextForLore);
             } catch {
               return false;
             }
           }
-          return recentText.toLowerCase().includes(key.toLowerCase());
-        });
+          return recentTextForLore.toLowerCase().includes(key.toLowerCase());
+        };
 
-        if (lore.keyword_logic === 'AND') return matches.every(Boolean);
-        if (lore.keyword_logic === 'NOT') return !matches.some(Boolean);
-        return matches.some(Boolean); // ANY
-      }).sort((a, b) => (a.insertion_order ?? 50) - (b.insertion_order ?? 50));
+        const matches = lore.keys.map(checkMatch);
+
+        let keyConditionMet = false;
+        if (lore.keyword_logic === 'AND') keyConditionMet = matches.every(Boolean);
+        else if (lore.keyword_logic === 'NOT') keyConditionMet = !matches.some(Boolean);
+        else keyConditionMet = matches.some(Boolean); // ANY
+
+        if (!keyConditionMet) return false;
+
+        // Check secondary keys if they exist
+        if (lore.secondary_keys && Array.isArray(lore.secondary_keys) && lore.secondary_keys.length > 0) {
+          const secondaryMatches = lore.secondary_keys.map(checkMatch);
+          return secondaryMatches.some(Boolean); // Usually secondary keys are ANY logic
+        }
+
+        return true;
+      }).sort((a, b) => (b.insertion_order ?? 50) - (a.insertion_order ?? 50)); // Descending priority
 
       let systemPrompt = `[System Note: You are the Game Master and Narrator of the Zenless Zone Zero world (The Hollow). The user is exploring this large open world freely via text. 
 The following agents/characters are currently bound to the user and are silently acting in the background during each turn:
@@ -1920,22 +1967,29 @@ The following agents/characters are currently bound to the user and are silently
       }
 
       // --- CONTEXT PRUNING ---
-      const maxContextChars = (Number(settings.api.context_size) || 4096) * 2.5;
-      let currentLength = systemPrompt.length;
+      const getTokenCount = (text: string) => {
+        // Rough estimation: 1 token ≈ 4 chars for English, might be different for Chinese.
+        // A slightly safer approximation for mixed content is dividing length by 3.
+        return Math.ceil(text.length / 3);
+      };
+
+      const maxContextTokens = Number(settings.api.context_size) || 4096;
+      let currentTokens = getTokenCount(systemPrompt);
       let prunedMessages = [];
 
       for (let i = messages.length - 1; i >= 0; i--) {
-        const msgLen = messages[i].content.length;
-        if (currentLength + msgLen > maxContextChars && prunedMessages.length > 0) break;
+        const msgTokens = getTokenCount(messages[i].content);
+        if (currentTokens + msgTokens > maxContextTokens && prunedMessages.length > 0) break;
         prunedMessages.unshift(messages[i]);
-        currentLength += msgLen;
+        currentTokens += msgTokens;
       }
       
       const bottomLorebooks = activeLorebooks.filter(l => l.position === 'bottom_of_prompt' || l.position === 'after_char');
       let bottomContent = "";
       if (bottomLorebooks.length > 0) {
         bottomContent += `[World Info / Lorebook (Bottom)]\n`;
-        bottomLorebooks.forEach(lore => {
+        // Reverse because we want highest priority (which are sorted first) to end up at the bottom of the block
+        bottomLorebooks.reverse().forEach(lore => {
           bottomContent += `- ${lore.content}\n`;
         });
         bottomContent += `\n`;
