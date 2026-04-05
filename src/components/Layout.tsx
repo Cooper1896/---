@@ -56,12 +56,6 @@ export default function Layout() {
             <Network className="w-5 h-5" /> 代理人网络
           </Link>
           <Link 
-            to="/hollow-input" 
-            className={`p-4 my-2 mx-2 font-headline font-bold text-sm tracking-tighter flex items-center gap-3 transition-transform duration-100 ${location.pathname === '/hollow-input' ? 'bg-[#FFF000] text-[#131313] clip-path-chamfer' : 'text-[#959177] hover:bg-[#353535] hover:translate-x-2 hover:text-[#00DAF3]'}`}
-          >
-            <Radio className="w-5 h-5" /> 深度空洞
-          </Link>
-          <Link 
             to="/inter-knot" 
             className={`p-4 my-2 mx-2 font-headline font-bold text-sm tracking-tighter flex items-center gap-3 transition-transform duration-100 ${location.pathname === '/inter-knot' ? 'bg-[#FFF000] text-[#131313] clip-path-chamfer' : 'text-[#959177] hover:bg-[#353535] hover:translate-x-2 hover:text-[#00DAF3]'}`}
           >

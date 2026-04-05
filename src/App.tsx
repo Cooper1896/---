@@ -8,8 +8,6 @@ import Layout from './components/Layout';
 import Home from './pages/Home';
 import InterKnot from './pages/InterKnot';
 import SettingsPage from './pages/Settings';
-import HollowChat from './pages/HollowChat';
-import HollowInput from './pages/HollowInput';
 import TimeSync from './pages/TimeSync';
 
 export default function App() {
@@ -22,8 +20,6 @@ export default function App() {
           <Route path="time-sync" element={<TimeSync />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
-        <Route path="/hollow-input" element={<HollowInput />} />
-        <Route path="/hollow" element={<HollowChat />} />
       </Routes>
     </BrowserRouter>
   );
