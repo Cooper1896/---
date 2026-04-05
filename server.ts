@@ -42,14 +42,8 @@ async function startServer() {
     theme: '墨色经典'
   };
 
-  let characters = [
-    { 
-      id: 'default', 
-      name: 'Fairy', 
-      description: '你是Fairy，新艾利都的智能助理。你说话专业、冷静、带有一点机械感，总是称呼用户为“主人”。', 
-      firstMessage: '主人，我已经为您规划了最佳探索路线。前方检测到以太变异体反应，请做好战斗准备。' 
-    }
-  ];
+  let characters: any[] = [];
+  let lorebooks: any[] = [];
 
   app.get("/api/characters", (req, res) => {
     res.json(characters);
@@ -73,6 +67,31 @@ async function startServer() {
 
   app.delete("/api/characters/:id", (req, res) => {
     characters = characters.filter(c => c.id !== req.params.id);
+    res.json({success: true});
+  });
+
+  app.get("/api/lorebooks", (req, res) => {
+    res.json(lorebooks);
+  });
+
+  app.post("/api/lorebooks", (req, res) => {
+    const newLore = { id: Date.now().toString(), ...req.body };
+    lorebooks.push(newLore);
+    res.json(newLore);
+  });
+
+  app.put("/api/lorebooks/:id", (req, res) => {
+    const index = lorebooks.findIndex(l => l.id === req.params.id);
+    if (index !== -1) {
+      lorebooks[index] = { ...lorebooks[index], ...req.body };
+      res.json(lorebooks[index]);
+    } else {
+      res.status(404).json({error: 'Not found'});
+    }
+  });
+
+  app.delete("/api/lorebooks/:id", (req, res) => {
+    lorebooks = lorebooks.filter(l => l.id !== req.params.id);
     res.json({success: true});
   });
 

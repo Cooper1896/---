@@ -43,7 +43,13 @@ export default function SettingsPage() {
   // Character Management State
   const [characters, setCharacters] = useState<any[]>([]);
   const [editingCharId, setEditingCharId] = useState<string | null>(null);
-  const [charForm, setCharForm] = useState({ name: '', description: '', firstMessage: '' });
+  const [charForm, setCharForm] = useState({ name: '', description: '', personality: '', firstMessage: '', mesExample: '' });
+
+  // Lorebook Management State
+  const [lorebooks, setLorebooks] = useState<any[]>([]);
+  const [editingLoreId, setEditingLoreId] = useState<string | null>(null);
+  const [loreForm, setLoreForm] = useState({ keys: '', content: '', constant: false });
+  const [tavernTab, setTavernTab] = useState<'characters' | 'lorebooks'>('characters');
 
   // Extensions State
   const [installedExtensions, setInstalledExtensions] = useState<any[]>([]);
@@ -65,14 +71,16 @@ export default function SettingsPage() {
       fetch('/api/settings').then(res => res.json()),
       fetch('/api/themes').then(res => res.json()),
       fetch('/api/characters').then(res => res.json()),
+      fetch('/api/lorebooks').then(res => res.json()),
       fetch('/api/extensions').then(res => res.json()),
       fetch('/api/db/settings').then(res => res.json()),
       fetch('/api/db/summary').then(res => res.json()),
       fetch('/api/db/vector').then(res => res.json())
-    ]).then(([settingsData, themesData, charsData, extsData, dbSettingsData, summaryData, vectorData]) => {
+    ]).then(([settingsData, themesData, charsData, loreData, extsData, dbSettingsData, summaryData, vectorData]) => {
       setSettings(settingsData);
       setThemes(themesData);
       setCharacters(charsData);
+      setLorebooks(loreData);
       setInstalledExtensions(extsData);
       setDbSettings(dbSettingsData);
       setSummaryDb(summaryData);
@@ -160,7 +168,13 @@ export default function SettingsPage() {
   // Character Management Functions
   const handleEditChar = (char: any) => {
     setEditingCharId(char.id);
-    setCharForm({ name: char.name, description: char.description, firstMessage: char.firstMessage });
+    setCharForm({ 
+      name: char.name || '', 
+      description: char.description || '', 
+      personality: char.personality || '',
+      firstMessage: char.firstMessage || '',
+      mesExample: char.mesExample || ''
+    });
   };
 
   const handleSaveChar = async () => {
@@ -184,7 +198,7 @@ export default function SettingsPage() {
       const res = await fetch('/api/characters', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: '新角色', description: '角色描述...', firstMessage: '你好。' })
+        body: JSON.stringify({ name: '新角色', description: '角色描述...', personality: '', firstMessage: '你好。', mesExample: '' })
       });
       const newChar = await res.json();
       setCharacters(prev => [...prev, newChar]);
@@ -202,6 +216,61 @@ export default function SettingsPage() {
       if (editingCharId === id) setEditingCharId(null);
     } catch (err) {
       console.error('Failed to delete character:', err);
+    }
+  };
+
+  // Lorebook Management Functions
+  const handleEditLore = (lore: any) => {
+    setEditingLoreId(lore.id);
+    setLoreForm({ 
+      keys: (lore.keys || []).join(', '), 
+      content: lore.content || '', 
+      constant: !!lore.constant 
+    });
+  };
+
+  const handleSaveLore = async () => {
+    if (!editingLoreId) return;
+    try {
+      const res = await fetch(`/api/lorebooks/${editingLoreId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...loreForm,
+          keys: loreForm.keys.split(',').map(k => k.trim()).filter(k => k)
+        })
+      });
+      const updatedLore = await res.json();
+      setLorebooks(prev => prev.map(l => l.id === updatedLore.id ? updatedLore : l));
+      setEditingLoreId(null);
+    } catch (err) {
+      console.error('Failed to save lorebook:', err);
+    }
+  };
+
+  const handleAddLore = async () => {
+    try {
+      const res = await fetch('/api/lorebooks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys: ['新词条'], content: '词条内容...', constant: false })
+      });
+      const newLore = await res.json();
+      setLorebooks(prev => [...prev, newLore]);
+      handleEditLore(newLore);
+    } catch (err) {
+      console.error('Failed to add lorebook:', err);
+    }
+  };
+
+  const handleDeleteLore = async (id: string) => {
+    if (!confirm('确定要删除这个词条吗？')) return;
+    try {
+      await fetch(`/api/lorebooks/${id}`, { method: 'DELETE' });
+      setLorebooks(prev => prev.filter(l => l.id !== id));
+      if (editingLoreId === id) setEditingLoreId(null);
+    } catch (err) {
+      console.error('Failed to delete lorebook:', err);
     }
   };
 
@@ -331,75 +400,177 @@ export default function SettingsPage() {
 
   const renderTavern = () => (
     <div className="animate-in fade-in duration-300">
-      <h3 className="text-2xl font-black text-[#FFF000] font-headline mb-8 border-b border-[#353535] pb-4">空洞预设 (角色管理)</h3>
+      <div className="flex items-center justify-between mb-8 border-b border-[#353535] pb-4">
+        <h3 className="text-2xl font-black text-[#FFF000] font-headline">空洞预设 (角色与世界书)</h3>
+        <div className="flex gap-2">
+          <button 
+            onClick={() => setTavernTab('characters')}
+            className={`px-4 py-1.5 text-sm font-bold transition-colors ${tavernTab === 'characters' ? 'bg-[#FFF000] text-[#131313]' : 'bg-[#1c1b1b] text-[#959177] border border-[#353535] hover:text-white'}`}
+          >
+            角色卡 (Characters)
+          </button>
+          <button 
+            onClick={() => setTavernTab('lorebooks')}
+            className={`px-4 py-1.5 text-sm font-bold transition-colors ${tavernTab === 'lorebooks' ? 'bg-[#FFF000] text-[#131313]' : 'bg-[#1c1b1b] text-[#959177] border border-[#353535] hover:text-white'}`}
+          >
+            世界书 (Lorebooks)
+          </button>
+        </div>
+      </div>
 
-      <div className="flex gap-6 h-[500px]">
-        {/* Character List */}
+      <div className="flex gap-6 h-[600px]">
+        {/* Left List */}
         <div className="w-1/3 bg-[#1c1b1b] border border-[#353535] rounded-sm flex flex-col">
           <div className="p-4 border-b border-[#353535] flex justify-between items-center">
-            <h4 className="text-white font-bold text-sm">角色列表</h4>
-            <button onClick={handleAddChar} className="text-[#00DAF3] hover:text-white text-xs font-bold">+ 新建</button>
+            <h4 className="text-white font-bold text-sm">{tavernTab === 'characters' ? '角色列表' : '词条列表'}</h4>
+            <button onClick={tavernTab === 'characters' ? handleAddChar : handleAddLore} className="text-[#00DAF3] hover:text-white text-xs font-bold">+ 新建</button>
           </div>
           <div className="flex-1 overflow-y-auto custom-scrollbar p-2">
-            {characters.map(char => (
-              <div 
-                key={char.id}
-                onClick={() => handleEditChar(char)}
-                className={`p-3 mb-2 cursor-pointer rounded-sm border-l-2 transition-colors ${editingCharId === char.id ? 'bg-[#353535] border-[#FFF000] text-white' : 'bg-[#131313] border-transparent text-[#959177] hover:bg-[#2a2a2a]'}`}
-              >
-                <div className="font-bold text-sm">{char.name}</div>
-                <div className="text-[10px] truncate mt-1 opacity-70">{char.description}</div>
-              </div>
-            ))}
+            {tavernTab === 'characters' ? (
+              characters.map(char => (
+                <div 
+                  key={char.id}
+                  onClick={() => handleEditChar(char)}
+                  className={`p-3 mb-2 cursor-pointer rounded-sm border-l-2 transition-colors ${editingCharId === char.id ? 'bg-[#353535] border-[#FFF000] text-white' : 'bg-[#131313] border-transparent text-[#959177] hover:bg-[#2a2a2a]'}`}
+                >
+                  <div className="font-bold text-sm">{char.name}</div>
+                  <div className="text-[10px] truncate mt-1 opacity-70">{char.description}</div>
+                </div>
+              ))
+            ) : (
+              lorebooks.map(lore => (
+                <div 
+                  key={lore.id}
+                  onClick={() => handleEditLore(lore)}
+                  className={`p-3 mb-2 cursor-pointer rounded-sm border-l-2 transition-colors ${editingLoreId === lore.id ? 'bg-[#353535] border-[#FFF000] text-white' : 'bg-[#131313] border-transparent text-[#959177] hover:bg-[#2a2a2a]'}`}
+                >
+                  <div className="font-bold text-sm truncate">{lore.keys?.join(', ') || '无触发词'}</div>
+                  <div className="text-[10px] truncate mt-1 opacity-70">{lore.content}</div>
+                  {lore.constant && <div className="text-[10px] text-[#00DAF3] mt-1">常驻词条</div>}
+                </div>
+              ))
+            )}
           </div>
         </div>
 
-        {/* Character Editor */}
+        {/* Right Editor */}
         <div className="flex-1 bg-[#1c1b1b] border border-[#353535] rounded-sm p-6 overflow-y-auto custom-scrollbar">
-          {editingCharId ? (
-            <div className="space-y-4">
-              <div className="flex justify-between items-center mb-4">
-                <h4 className="text-[#FFF000] font-bold">编辑角色</h4>
-                <div className="flex gap-2">
-                  <button onClick={() => handleDeleteChar(editingCharId)} className="px-3 py-1 text-xs text-red-400 border border-red-400/30 hover:bg-red-400/10 transition-colors">删除</button>
-                  <button onClick={handleSaveChar} className="px-3 py-1 text-xs text-[#131313] bg-[#FFF000] hover:bg-white transition-colors">保存更改</button>
+          {tavernTab === 'characters' ? (
+            editingCharId ? (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center mb-4">
+                  <h4 className="text-[#FFF000] font-bold">编辑角色</h4>
+                  <div className="flex gap-2">
+                    <button onClick={() => handleDeleteChar(editingCharId)} className="px-3 py-1 text-xs text-red-400 border border-red-400/30 hover:bg-red-400/10 transition-colors">删除</button>
+                    <button onClick={handleSaveChar} className="px-3 py-1 text-xs text-[#131313] bg-[#FFF000] hover:bg-white transition-colors">保存更改</button>
+                  </div>
+                </div>
+                
+                <div>
+                  <label className="block text-xs text-[#959177] mb-1">角色名称 (Name)</label>
+                  <input 
+                    type="text" 
+                    className="w-full bg-[#131313] border border-[#353535] text-white p-2 text-sm focus:border-[#FFF000] outline-none"
+                    value={charForm.name}
+                    onChange={e => setCharForm({...charForm, name: e.target.value})}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs text-[#959177] mb-1">角色设定 (Description)</label>
+                  <textarea 
+                    rows={4}
+                    className="w-full bg-[#131313] border border-[#353535] text-white p-2 text-sm focus:border-[#FFF000] outline-none resize-none custom-scrollbar"
+                    value={charForm.description}
+                    onChange={e => setCharForm({...charForm, description: e.target.value})}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs text-[#959177] mb-1">性格特征 (Personality)</label>
+                  <textarea 
+                    rows={2}
+                    className="w-full bg-[#131313] border border-[#353535] text-white p-2 text-sm focus:border-[#FFF000] outline-none resize-none custom-scrollbar"
+                    value={charForm.personality}
+                    onChange={e => setCharForm({...charForm, personality: e.target.value})}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs text-[#959177] mb-1">首条消息 (First Message)</label>
+                  <textarea 
+                    rows={3}
+                    className="w-full bg-[#131313] border border-[#353535] text-white p-2 text-sm focus:border-[#FFF000] outline-none resize-none custom-scrollbar"
+                    value={charForm.firstMessage}
+                    onChange={e => setCharForm({...charForm, firstMessage: e.target.value})}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs text-[#959177] mb-1">对话示例 (Message Example)</label>
+                  <textarea 
+                    rows={4}
+                    className="w-full bg-[#131313] border border-[#353535] text-white p-2 text-sm focus:border-[#FFF000] outline-none resize-none custom-scrollbar"
+                    value={charForm.mesExample}
+                    onChange={e => setCharForm({...charForm, mesExample: e.target.value})}
+                    placeholder="<START>\n{{user}}: 你好\n{{char}}: *挥手* 你好！"
+                  />
                 </div>
               </div>
-              
-              <div>
-                <label className="block text-xs text-[#959177] mb-1">角色名称 (Name)</label>
-                <input 
-                  type="text" 
-                  className="w-full bg-[#131313] border border-[#353535] text-white p-2 text-sm focus:border-[#FFF000] outline-none"
-                  value={charForm.name}
-                  onChange={e => setCharForm({...charForm, name: e.target.value})}
-                />
+            ) : (
+              <div className="h-full flex items-center justify-center text-[#959177] text-sm">
+                请在左侧选择一个角色进行编辑
               </div>
-
-              <div>
-                <label className="block text-xs text-[#959177] mb-1">角色设定 (Description / System Prompt)</label>
-                <textarea 
-                  rows={6}
-                  className="w-full bg-[#131313] border border-[#353535] text-white p-2 text-sm focus:border-[#FFF000] outline-none resize-none custom-scrollbar"
-                  value={charForm.description}
-                  onChange={e => setCharForm({...charForm, description: e.target.value})}
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs text-[#959177] mb-1">首条消息 (First Message)</label>
-                <textarea 
-                  rows={4}
-                  className="w-full bg-[#131313] border border-[#353535] text-white p-2 text-sm focus:border-[#FFF000] outline-none resize-none custom-scrollbar"
-                  value={charForm.firstMessage}
-                  onChange={e => setCharForm({...charForm, firstMessage: e.target.value})}
-                />
-              </div>
-            </div>
+            )
           ) : (
-            <div className="h-full flex items-center justify-center text-[#959177] text-sm">
-              请在左侧选择一个角色进行编辑
-            </div>
+            editingLoreId ? (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center mb-4">
+                  <h4 className="text-[#FFF000] font-bold">编辑世界书词条</h4>
+                  <div className="flex gap-2">
+                    <button onClick={() => handleDeleteLore(editingLoreId)} className="px-3 py-1 text-xs text-red-400 border border-red-400/30 hover:bg-red-400/10 transition-colors">删除</button>
+                    <button onClick={handleSaveLore} className="px-3 py-1 text-xs text-[#131313] bg-[#FFF000] hover:bg-white transition-colors">保存更改</button>
+                  </div>
+                </div>
+                
+                <div>
+                  <label className="block text-xs text-[#959177] mb-1">触发关键词 (Keys, 逗号分隔)</label>
+                  <input 
+                    type="text" 
+                    className="w-full bg-[#131313] border border-[#353535] text-white p-2 text-sm focus:border-[#FFF000] outline-none"
+                    value={loreForm.keys}
+                    onChange={e => setLoreForm({...loreForm, keys: e.target.value})}
+                    placeholder="例如: 空洞, 邦布, 以太"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 mt-2 mb-4">
+                  <input 
+                    type="checkbox" 
+                    id="constant-check"
+                    checked={loreForm.constant}
+                    onChange={e => setLoreForm({...loreForm, constant: e.target.checked})}
+                    className="accent-[#00DAF3]"
+                  />
+                  <label htmlFor="constant-check" className="text-xs text-[#00DAF3] cursor-pointer">设为常驻词条 (无视关键词始终注入)</label>
+                </div>
+
+                <div>
+                  <label className="block text-xs text-[#959177] mb-1">词条内容 (Content)</label>
+                  <textarea 
+                    rows={10}
+                    className="w-full bg-[#131313] border border-[#353535] text-white p-2 text-sm focus:border-[#FFF000] outline-none resize-none custom-scrollbar"
+                    value={loreForm.content}
+                    onChange={e => setLoreForm({...loreForm, content: e.target.value})}
+                    placeholder="输入详细的背景设定..."
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="h-full flex items-center justify-center text-[#959177] text-sm">
+                请在左侧选择一个词条进行编辑
+              </div>
+            )
           )}
         </div>
       </div>
