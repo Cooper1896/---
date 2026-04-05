@@ -289,19 +289,36 @@ async function startServer() {
     }
   });
 
-  let chatHistories: Record<string, any[]> = {};
+  let interKnotHistories: Record<string, any[]> = {};
+  let hollowHistory: any[] = [];
 
-  app.get("/api/chat/:charId", (req, res) => {
-    res.json(chatHistories[req.params.charId] || []);
+  // --- Inter-Knot (Agent Network) Endpoints ---
+  app.get("/api/interknot/:charId", (req, res) => {
+    res.json(interKnotHistories[req.params.charId] || []);
   });
 
-  app.post("/api/chat/:charId/sync", (req, res) => {
-    chatHistories[req.params.charId] = req.body.messages;
+  app.post("/api/interknot/:charId/sync", (req, res) => {
+    interKnotHistories[req.params.charId] = req.body.messages;
     res.json({ success: true });
   });
 
-  app.post("/api/chat/:charId/clear", (req, res) => {
-    chatHistories[req.params.charId] = [];
+  app.post("/api/interknot/:charId/clear", (req, res) => {
+    interKnotHistories[req.params.charId] = [];
+    res.json({ success: true });
+  });
+
+  // --- Hollow (World Exploration) Endpoints ---
+  app.get("/api/hollow/history", (req, res) => {
+    res.json(hollowHistory);
+  });
+
+  app.post("/api/hollow/sync", (req, res) => {
+    hollowHistory = req.body.messages;
+    res.json({ success: true });
+  });
+
+  app.post("/api/hollow/clear", (req, res) => {
+    hollowHistory = [];
     res.json({ success: true });
   });
 
@@ -313,7 +330,8 @@ async function startServer() {
       const dataToSync = {
         characters,
         lorebooks,
-        chatHistories,
+        interKnotHistories,
+        hollowHistory,
         settings
       };
 
@@ -409,7 +427,9 @@ async function startServer() {
 
       if (parsedData.characters) characters = parsedData.characters;
       if (parsedData.lorebooks) lorebooks = parsedData.lorebooks;
-      if (parsedData.chatHistories) chatHistories = parsedData.chatHistories;
+      if (parsedData.interKnotHistories) interKnotHistories = parsedData.interKnotHistories;
+      if (parsedData.hollowHistory) hollowHistory = parsedData.hollowHistory;
+      if (parsedData.chatHistories) interKnotHistories = parsedData.chatHistories; // Backward compatibility
       if (parsedData.settings) settings = parsedData.settings;
 
       res.json({ success: true });
@@ -419,7 +439,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/chat", async (req, res) => {
+  app.post("/api/interknot/chat", async (req, res) => {
     const { messages, characterId } = req.body;
     
     if (!messages || !Array.isArray(messages)) {
@@ -457,7 +477,7 @@ async function startServer() {
         });
       });
 
-      let systemPrompt = `[System Note: You are engaging in a text-based roleplay. You must strictly stay in character as ${char.name}. Use asterisks for *actions and expressions* and quotes for "speech". Do not break character or refer to yourself as an AI.]\n\n`;
+      let systemPrompt = `[System Note: You are engaging in a private 1-on-1 text-based roleplay (Agent Network). You must strictly stay in character as ${char.name}. This is a focused scenario with the user. Other characters may appear briefly to drive the plot, but they are not the main focus. Use asterisks for *actions and expressions* and quotes for "speech". Do not break character or refer to yourself as an AI.]\n\n`;
 
       systemPrompt += `[Character Identity: ${char.name}]\n${char.description || ''}\n\n`;
 
@@ -547,6 +567,141 @@ async function startServer() {
         id: Date.now(),
         role: 'npc',
         name: char.name,
+        content: replyContent,
+        timestamp: new Date().toISOString()
+      };
+      
+      res.json(botMessage);
+
+    } catch (error: any) {
+      console.error("Chat API Error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/hollow/chat", async (req, res) => {
+    const { messages } = req.body;
+    
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: 'Invalid messages array' });
+    }
+
+    // If no API key, fallback to mock response
+    if (!settings.api.key) {
+      setTimeout(() => {
+        const botMessage = {
+          id: Date.now(),
+          role: 'npc',
+          name: 'World',
+          content: `[未配置API密钥] 收到探索指令：“${messages[messages.length - 1].content}”。请在设置中配置API密钥以启用真实世界探索。`,
+          timestamp: new Date().toISOString()
+        };
+        res.json(botMessage);
+      }, 1000);
+      return;
+    }
+
+    try {
+      let replyContent = '';
+      
+      // --- PROMPT BUILDER ENGINE ---
+      const recentText = messages.slice(-5).map((m: any) => m.content).join('\n');
+      const activeLorebooks = lorebooks.filter(lore => {
+        if (lore.constant) return true;
+        if (!lore.keys || !Array.isArray(lore.keys)) return false;
+        return lore.keys.some((key: string) => {
+          if (!key) return false;
+          return recentText.toLowerCase().includes(key.toLowerCase());
+        });
+      });
+
+      let systemPrompt = `[System Note: You are the Game Master and Narrator of the Zenless Zone Zero world (The Hollow). The user is exploring this large open world freely via text. 
+The following agents/characters are currently bound to the user and are silently acting in the background during each turn:
+`;
+      characters.forEach(c => {
+         systemPrompt += `- ${c.name}: ${c.description}\n`;
+      });
+      
+      systemPrompt += `\nIn each turn, you must describe the environment, the results of the user's actions, and briefly mention what the other characters are doing in the background to support the user or react to the situation. You act as the world itself, narrating events. Do not break character or refer to yourself as an AI.]\n\n`;
+
+      if (activeLorebooks.length > 0) {
+        systemPrompt += `[World Info / Lorebook]\n`;
+        activeLorebooks.forEach(lore => {
+          systemPrompt += `- ${lore.content}\n`;
+        });
+        systemPrompt += `\n`;
+      }
+
+      if (settings.api.jailbreakPrompt) {
+        systemPrompt += `\n[System Override / Jailbreak]\n${settings.api.jailbreakPrompt}\n\n`;
+      }
+      // -----------------------------
+
+      if (settings.api.provider === 'OpenAI' || settings.api.provider === 'Custom') {
+        const baseUrl = settings.api.url || 'https://api.openai.com';
+        const endpoint = baseUrl.replace(/\/+$/, '') + '/v1/chat/completions';
+        
+        const apiMessages = [
+          { role: 'system', content: systemPrompt },
+          ...messages.map(m => ({ role: m.role === 'npc' ? 'assistant' : 'user', content: m.content }))
+        ];
+
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${settings.api.key}`
+          },
+          body: JSON.stringify({
+            model: settings.api.model,
+            messages: apiMessages,
+            temperature: Number(settings.api.temperature),
+            max_tokens: Number(settings.api.max_tokens),
+            top_p: Number(settings.api.top_p)
+          })
+        });
+        
+        if (!response.ok) {
+          const errData = await response.text();
+          throw new Error(`API Error: ${response.status} - ${errData}`);
+        }
+        const data = await response.json();
+        replyContent = data.choices[0].message.content;
+
+      } else if (settings.api.provider === 'Gemini') {
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${settings.api.model}:generateContent?key=${settings.api.key}`;
+        
+        const geminiMessages = messages.map(m => ({
+          role: m.role === 'npc' ? 'model' : 'user',
+          parts: [{ text: m.content }]
+        }));
+
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            system_instruction: { parts: [{ text: systemPrompt }] },
+            contents: geminiMessages,
+            generationConfig: {
+              temperature: Number(settings.api.temperature),
+              maxOutputTokens: Number(settings.api.max_tokens),
+              topP: Number(settings.api.top_p)
+            }
+          })
+        });
+        
+        if (!response.ok) {
+          const errData = await response.text();
+          throw new Error(`API Error: ${response.status} - ${errData}`);
+        }
+        const data = await response.json();
+        replyContent = data.candidates[0].content.parts[0].text;
+      }
+
+      const botMessage = {
+        id: Date.now(),
+        role: 'npc',
+        name: 'World',
         content: replyContent,
         timestamp: new Date().toISOString()
       };

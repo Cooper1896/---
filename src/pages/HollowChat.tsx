@@ -10,31 +10,27 @@ interface Message {
   timestamp: string;
 }
 
-interface Character {
-  id: string;
-  name: string;
-  description: string;
-  firstMessage: string;
-}
-
 export default function HollowChat() {
   const navigate = useNavigate();
   const [messages, setMessages] = useState<Message[]>([]);
-  const [characters, setCharacters] = useState<Character[]>([]);
-  const [selectedCharId, setSelectedCharId] = useState<string>('');
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetch('/api/characters')
+    fetch('/api/hollow/history')
       .then(res => res.json())
-      .then(charsData => {
-        setCharacters(charsData);
-        if (charsData.length > 0) {
-          setSelectedCharId(charsData[0].id);
-          resetChat(charsData[0]);
+      .then(data => {
+        if (data && data.length > 0) {
+          setMessages(data);
+        } else {
+          const initialMsgs: Message[] = [
+            { id: Date.now() - 1000, role: 'system', name: 'SYSTEM', content: '>>> 警告：已脱离安全网络。当前处于空洞直连模式。大世界探索已开启。', timestamp: new Date().toISOString() },
+            { id: Date.now(), role: 'npc', name: 'World', content: '你环顾四周，空洞内的以太物质在空气中漂浮。你的代理人们正在后台待命，随时准备响应你的行动。你打算做什么？', timestamp: new Date().toISOString() }
+          ];
+          setMessages(initialMsgs);
+          syncMessages(initialMsgs);
         }
         setLoading(false);
       })
@@ -44,17 +40,16 @@ export default function HollowChat() {
       });
   }, []);
 
-  const resetChat = (char: Character) => {
-    setMessages([
-      { id: Date.now() - 1000, role: 'system', name: 'SYSTEM', content: '>>> 警告：已脱离安全网络。当前处于空洞直连模式。', timestamp: new Date().toISOString() },
-      { id: Date.now(), role: 'npc', name: char.name, content: char.firstMessage, timestamp: new Date().toISOString() }
-    ]);
-  };
-
-  const handleCharChange = (id: string) => {
-    setSelectedCharId(id);
-    const char = characters.find(c => c.id === id);
-    if (char) resetChat(char);
+  const syncMessages = async (msgs: Message[]) => {
+    try {
+      await fetch(`/api/hollow/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: msgs })
+      });
+    } catch (err) {
+      console.error('Failed to sync messages:', err);
+    }
   };
 
   useEffect(() => {
@@ -62,7 +57,7 @@ export default function HollowChat() {
   }, [messages]);
 
   const handleSend = async (customMessages?: Message[]) => {
-    const msgsToSend = customMessages || messages;
+    const msgsToSend = customMessages || [...messages];
     let newMsgContent = '';
     
     if (!customMessages) {
@@ -79,35 +74,56 @@ export default function HollowChat() {
         content: newMsgContent,
         timestamp: new Date().toISOString()
       };
-      setMessages(prev => [...prev, newUserMsg]);
       msgsToSend.push(newUserMsg);
+      setMessages(msgsToSend);
+      await syncMessages(msgsToSend);
     } else {
       setSending(true);
     }
 
     try {
-      const res = await fetch('/api/chat', {
+      const res = await fetch('/api/hollow/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          messages: msgsToSend,
-          characterId: selectedCharId
+          messages: msgsToSend
         })
       });
       const botMsg = await res.json();
       if (botMsg.error) throw new Error(botMsg.error);
-      setMessages(prev => [...prev, botMsg]);
+      
+      const finalMessages = [...msgsToSend, botMsg];
+      setMessages(finalMessages);
+      await syncMessages(finalMessages);
     } catch (err) {
       console.error('Failed to send message:', err);
-      setMessages(prev => [...prev, {
+      const errorMsg: Message = {
         id: Date.now(),
         role: 'system',
         name: 'SYSTEM',
         content: `通信错误: ${err}`,
         timestamp: new Date().toISOString()
-      }]);
+      };
+      const finalMessages = [...msgsToSend, errorMsg];
+      setMessages(finalMessages);
+      await syncMessages(finalMessages);
     } finally {
       setSending(false);
+    }
+  };
+
+  const handleClearChat = async () => {
+    if (!confirm('确定要清除空洞探索的所有记录吗？')) return;
+    try {
+      await fetch(`/api/hollow/clear`, { method: 'POST' });
+      const initialMsgs: Message[] = [
+        { id: Date.now() - 1000, role: 'system', name: 'SYSTEM', content: '>>> 警告：已脱离安全网络。当前处于空洞直连模式。大世界探索已开启。', timestamp: new Date().toISOString() },
+        { id: Date.now(), role: 'npc', name: 'World', content: '你环顾四周，空洞内的以太物质在空气中漂浮。你的代理人们正在后台待命，随时准备响应你的行动。你打算做什么？', timestamp: new Date().toISOString() }
+      ];
+      setMessages(initialMsgs);
+      syncMessages(initialMsgs);
+    } catch (err) {
+      console.error('Failed to clear chat:', err);
     }
   };
 
@@ -142,20 +158,8 @@ export default function HollowChat() {
           </button>
           <div className="h-6 w-px bg-[#353535]"></div>
           <div className="flex items-center gap-2 text-xs font-headline text-[#FA5C1C] bg-[#FA5C1C]/10 px-3 py-1.5 rounded-full border border-[#FA5C1C]/30">
-            <Zap className="w-4 h-4 animate-pulse" /> 空洞直连模式
+            <Zap className="w-4 h-4 animate-pulse" /> 空洞直连模式 (大世界探索)
           </div>
-        </div>
-
-        <div className="flex items-center gap-4">
-          <select 
-            className="bg-[#1c1b1b] border border-[#353535] text-white font-bold font-headline outline-none cursor-pointer px-4 py-2 clip-path-chamfer-small hover:border-[#FFF000] transition-colors"
-            value={selectedCharId}
-            onChange={(e) => handleCharChange(e.target.value)}
-          >
-            {characters.map(c => (
-              <option key={c.id} value={c.id} className="bg-[#131313] text-white">{c.name}</option>
-            ))}
-          </select>
         </div>
       </div>
 

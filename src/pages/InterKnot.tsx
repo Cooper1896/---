@@ -40,7 +40,7 @@ export default function InterKnot() {
 
   useEffect(() => {
     if (selectedCharId) {
-      fetch(`/api/chat/${selectedCharId}`)
+      fetch(`/api/interknot/${selectedCharId}`)
         .then(res => res.json())
         .then(data => {
           if (data && data.length > 0) {
@@ -68,7 +68,7 @@ export default function InterKnot() {
 
   const syncMessages = async (charId: string, msgs: Message[]) => {
     try {
-      await fetch(`/api/chat/${charId}/sync`, {
+      await fetch(`/api/interknot/${charId}/sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: msgs })
@@ -98,7 +98,7 @@ export default function InterKnot() {
     await syncMessages(selectedCharId, updatedMessages);
 
     try {
-      const res = await fetch('/api/chat', {
+      const res = await fetch('/api/interknot/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -132,7 +132,7 @@ export default function InterKnot() {
   const handleClearChat = async () => {
     if (!selectedCharId || !confirm('确定要清除与该代理人的所有私信记录吗？')) return;
     try {
-      await fetch(`/api/chat/${selectedCharId}/clear`, { method: 'POST' });
+      await fetch(`/api/interknot/${selectedCharId}/clear`, { method: 'POST' });
       const char = characters.find(c => c.id === selectedCharId);
       if (char) {
         const initialMsgs: Message[] = [
