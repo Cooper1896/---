@@ -1,0 +1,52 @@
+/**
+ * Zenless Tavern – CSS Custom Properties
+ *
+ * Every semantic colour, font and spacing value used across the app.
+ * Tailwind classes reference these via @theme or arbitrary values
+ * e.g. bg-[var(--zt-bg)] or text-[var(--zt-accent-primary)].
+ */
+
+:root {
+  /* ── backgrounds ─────────────────────────────────── */
+  --zt-bg: #131313;
+  --zt-bg-deep: #0a0a0a;
+  --zt-surface: #1c1b1b;
+  --zt-surface-alt: #0e0e0e;
+
+  /* ── borders / lines ─────────────────────────────── */
+  --zt-line: #353535;
+  --zt-line-light: #454545;
+
+  /* ── text ─────────────────────────────────────────── */
+  --zt-text: #e5e2e1;
+  --zt-muted: #959177;
+
+  /* ── accent: primary (yellow / signal) ───────────── */
+  --zt-accent-primary: #FFF000;
+  --zt-accent-primary-fg: #353100;
+
+  /* ── accent: secondary (orange / industrial) ─────── */
+  --zt-accent-secondary: #FA5C1C;
+
+  /* ── accent: tertiary (cyan / terminal) ──────────── */
+  --zt-accent-tertiary: #00DAF3;
+
+  /* ── status ───────────────────────────────────────── */
+  --zt-danger: #ef4444;
+  --zt-danger-muted: rgba(239, 68, 68, 0.1);
+  --zt-warning: #FFF000;
+  --zt-success: #4ade80;
+  --zt-success-muted: rgba(74, 222, 128, 0.1);
+  --zt-info: #00DAF3;
+
+  /* ── fonts ────────────────────────────────────────── */
+  --zt-font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --zt-font-headline: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+
+  /* ── layout ───────────────────────────────────────── */
+  --zt-nav-height: 56px;
+  --zt-sidebar-width: 256px;
+  --zt-footer-height: 40px;
+  --zt-phone-max-w: 430px;
+  --zt-phone-max-h: 932px;
+}
