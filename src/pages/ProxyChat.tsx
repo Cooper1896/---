@@ -46,8 +46,12 @@ export default function ProxyChat() {
     fetch(`/api/proxy/history?charId=${selectedChar}`)
       .then(res => res.json())
       .then(data => {
-        if (data && data.length > 0) {
-          setMessages(data);
+        if (data.scenario) {
+          setScenario(data.scenario);
+        }
+        const msgs = data.messages || data;
+        if (msgs && msgs.length > 0) {
+          setMessages(msgs);
         } else {
           const char = characters.find(c => c.id === selectedChar);
           const initialMsgs: Message[] = [
@@ -63,7 +67,7 @@ export default function ProxyChat() {
         console.error('Failed to fetch data:', err);
         setLoading(false);
       });
-  }, [selectedChar, scenario, view]); // eslint-disable-line
+  }, [selectedChar, view]); // eslint-disable-line
 
   const syncMessages = async (msgs: Message[], charId: string) => {
     try {

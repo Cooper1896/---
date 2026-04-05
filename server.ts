@@ -504,6 +504,7 @@ async function startServer() {
   let aiLogs: AILog[] = [];
   let proxyScenarios: Record<string, string> = {};
   let interKnotHistories: Record<string, ChatMessage[]> = {};
+  let chatHistories: Record<string, ChatMessage[]> = {};
   let hollowHistory: ChatMessage[] = [];
   let extensions: Extension[] = [];
 
@@ -544,6 +545,7 @@ async function startServer() {
       lorebooks,
       aiLogs,
       interKnotHistories,
+      chatHistories,
       hollowHistory,
       proxyScenarios,
       extensions,
@@ -592,6 +594,7 @@ async function startServer() {
       if (parsed.lorebooks) lorebooks = parsed.lorebooks as Lorebook[];
       if (parsed.aiLogs) aiLogs = parsed.aiLogs;
       if (parsed.interKnotHistories) interKnotHistories = parsed.interKnotHistories;
+      if (parsed.chatHistories) chatHistories = parsed.chatHistories;
       if (parsed.hollowHistory) hollowHistory = parsed.hollowHistory;
       if (parsed.proxyScenarios) proxyScenarios = parsed.proxyScenarios;
       if (parsed.extensions) extensions = parsed.extensions;
@@ -1204,14 +1207,17 @@ async function startServer() {
       return res.status(400).json({ error: "charId is required" });
     }
 
-    res.json(interKnotHistories[charId] || []);
+    res.json({
+      messages: chatHistories[charId] || [],
+      scenario: proxyScenarios[charId] || '在咖啡店相遇...'
+    });
   });
 
   app.post("/api/proxy/sync", (req, res) => {
     try {
       const payload = parseWithSchema(proxySyncSchema, req.body, "Proxy sync payload");
 
-      interKnotHistories[payload.charId] = payload.messages;
+      chatHistories[payload.charId] = payload.messages;
 
       if (typeof payload.scenario === "string") {
         proxyScenarios[payload.charId] = payload.scenario;
@@ -1227,7 +1233,7 @@ async function startServer() {
   app.post("/api/proxy/clear", (req, res) => {
     try {
       const payload = parseWithSchema(proxyClearSchema, req.body, "Proxy clear payload");
-      interKnotHistories[payload.charId] = [];
+      chatHistories[payload.charId] = [];
       delete proxyScenarios[payload.charId];
       schedulePersist();
       res.json({ success: true });
@@ -1294,6 +1300,7 @@ async function startServer() {
         characters,
         lorebooks,
         interKnotHistories,
+        chatHistories,
         hollowHistory,
         proxyScenarios,
         settings: sanitizeSettingsForSync(settings),
@@ -1365,7 +1372,7 @@ async function startServer() {
       if (parsedData.lorebooks) lorebooks = parsedData.lorebooks as Lorebook[];
       if (parsedData.interKnotHistories) interKnotHistories = parsedData.interKnotHistories;
       if (parsedData.hollowHistory) hollowHistory = parsedData.hollowHistory;
-      if (parsedData.chatHistories) interKnotHistories = parsedData.chatHistories; // Backward compatibility
+      if (parsedData.chatHistories) chatHistories = parsedData.chatHistories;
       if (parsedData.proxyScenarios) proxyScenarios = parsedData.proxyScenarios;
       if (parsedData.settings) {
         const incomingSettings: AppSettings = {
@@ -1807,7 +1814,7 @@ async function startServer() {
   app.post("/api/proxy/action", (req, res) => {
     try {
       const payload = parseWithSchema(proxyActionPayloadSchema, req.body, "Proxy action payload");
-      interKnotHistories[payload.charId] = payload.messages;
+      chatHistories[payload.charId] = payload.messages;
       schedulePersist();
       res.json({ success: true });
     } catch (error) {
