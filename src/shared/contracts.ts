@@ -28,6 +28,10 @@ export interface AppSettings {
     context_size: number;
     jailbreakPrompt: string;
     savedPreset?: SavedApiPreset;
+    global_system_prompt?: string;
+    instruct_mode_format?: string;
+    nsfw_toggle?: boolean;
+    main_prompt?: string;
   };
   theme: string;
 }
@@ -37,16 +41,44 @@ export interface Character {
   name: string;
   description: string;
   personality: string;
-  firstMessage: string;
-  mesExample: string;
+  first_mes?: string;
+  mes_example?: string;
+  scenario?: string;
+  creator_notes?: string;
+  system_prompt?: string;
+  post_history_instructions?: string;
+  alternate_greetings?: string[];
+  tags?: string[];
+  creator?: string;
+  character_version?: string;
+  extensions?: Record<string, any>;
   avatar?: string;
+}
+
+export interface LorebookEntry {
+  keys?: string[];
+  content: string;
+  constant: boolean;
+  insertion_order?: number;
+  position?: 'before_char' | 'after_char' | 'top_of_prompt' | 'bottom_of_prompt';
+  keyword_logic?: 'ANY' | 'AND' | 'NOT';
+  regex_matching?: boolean;
+  secondary_keys?: string[];
+  extensions?: Record<string, any>;
+  search_range?: number;
 }
 
 export interface Lorebook {
   id: string;
-  keys: string[];
-  content: string;
-  constant: boolean;
+  entries: LorebookEntry[];
+  // Backward compatibility
+  keys?: string[];
+  content?: string;
+  constant?: boolean;
+  insertion_order?: number;
+  position?: 'before_char' | 'after_char' | 'top_of_prompt' | 'bottom_of_prompt';
+  keyword_logic?: 'ANY' | 'AND' | 'NOT';
+  regex_matching?: boolean;
 }
 
 export interface Extension {
@@ -108,10 +140,15 @@ export interface AILog {
 
 export interface ChatMessage {
   id: number;
-  role: ChatRole;
+  role: ChatRole | 'narration';
   name: string;
   content: string;
   timestamp: string;
+  swipes?: string[];
+  active_swipe_id?: number;
+  is_edited?: boolean;
+  extra?: Record<string, any>;
+  swipe_id?: number; // Backward compatibility
 }
 
 export interface SettingsBootstrap {

@@ -4,6 +4,7 @@ import { promises as fs } from "fs";
 import net from "net";
 import path from "path";
 import { z } from "zod";
+import { createParser } from "eventsource-parser";
 import type {
   AILog,
   AppSettings,
@@ -39,10 +40,15 @@ const apiProviderSchema = z.enum(["OpenAI", "Gemini", "Custom"]);
 
 const chatMessageSchema = z.object({
   id: z.coerce.number().int(),
-  role: z.enum(["system", "npc", "user"]),
+  role: z.enum(["system", "npc", "user", "narration"]),
   name: z.string().trim().min(1).max(120),
-  content: z.string().trim().min(1).max(20000),
+  content: z.string().trim().max(20000),
   timestamp: z.string().trim().min(1).max(120),
+  swipes: z.array(z.string().max(20000)).optional(),
+  active_swipe_id: z.number().int().optional(),
+  is_edited: z.boolean().optional(),
+  extra: z.record(z.string(), z.any()).optional(),
+  swipe_id: z.number().int().optional(), // Backward compatibility
 });
 
 const chatMessagesSchema = z.array(chatMessageSchema).max(MAX_CHAT_MESSAGES);
@@ -51,8 +57,17 @@ const characterPayloadObjectSchema = z.object({
   name: z.string().trim().min(1).max(120),
   description: z.string().max(10000).default(""),
   personality: z.string().max(10000).default(""),
-  firstMessage: z.string().max(10000).default(""),
-  mesExample: z.string().max(20000).default(""),
+  first_mes: z.string().max(10000).optional(),
+  mes_example: z.string().max(20000).optional(),
+  scenario: z.string().max(20000).optional(),
+  creator_notes: z.string().max(20000).optional(),
+  system_prompt: z.string().max(20000).optional(),
+  post_history_instructions: z.string().max(20000).optional(),
+  alternate_greetings: z.array(z.string().max(10000)).optional(),
+  tags: z.array(z.string().trim()).optional(),
+  creator: z.string().max(1000).optional(),
+  character_version: z.string().max(1000).optional(),
+  extensions: z.record(z.string(), z.any()).optional(),
   avatar: z.string().max(5_000_000).optional(),
 });
 
@@ -76,18 +91,43 @@ const loreKeysSchema = z
   }, z.array(z.string().trim().min(1)))
   .transform((value) => value.map((item) => item.trim()).filter(Boolean));
 
-const lorebookPayloadObjectSchema = z.object({
-  keys: loreKeysSchema,
+const lorebookEntrySchema = z.object({
+  keys: loreKeysSchema.optional(),
   content: z.string().max(20000).default(""),
   constant: z.boolean().default(false),
+  insertion_order: z.number().default(50),
+  position: z.enum(['before_char', 'after_char', 'top_of_prompt', 'bottom_of_prompt']).default('before_char'),
+  keyword_logic: z.enum(['ANY', 'AND', 'NOT']).default('ANY'),
+  regex_matching: z.boolean().default(false),
+  secondary_keys: loreKeysSchema.optional(),
+  extensions: z.record(z.string(), z.any()).optional(),
+  search_range: z.number().optional(),
+});
+
+const lorebookPayloadObjectSchema = z.object({
+  entries: z.array(lorebookEntrySchema).default([]),
+  // Backward compatibility
+  keys: loreKeysSchema.optional(),
+  content: z.string().max(20000).optional(),
+  constant: z.boolean().optional(),
+  insertion_order: z.number().optional(),
+  position: z.enum(['before_char', 'after_char', 'top_of_prompt', 'bottom_of_prompt']).optional(),
+  keyword_logic: z.enum(['ANY', 'AND', 'NOT']).optional(),
+  regex_matching: z.boolean().optional(),
 });
 
 const lorebookPayloadSchema = lorebookPayloadObjectSchema;
 
 const lorebookUpdateSchema = z.object({
+  entries: z.array(lorebookEntrySchema).optional(),
+  // Backward compatibility
   keys: loreKeysSchema.optional(),
   content: z.string().max(20000).optional(),
   constant: z.boolean().optional(),
+  insertion_order: z.number().optional(),
+  position: z.enum(['before_char', 'after_char', 'top_of_prompt', 'bottom_of_prompt']).optional(),
+  keyword_logic: z.enum(['ANY', 'AND', 'NOT']).optional(),
+  regex_matching: z.boolean().optional(),
 }).refine((value) => Object.keys(value).length > 0, {
   message: "At least one lorebook field is required",
 });
@@ -145,16 +185,24 @@ const testConnectionPayloadSchema = modelsPayloadSchema.extend({
 const interknotChatPayloadSchema = z.object({
   messages: chatMessagesSchema,
   characterId: z.string().trim().max(120).optional(),
+  stream: z.boolean().optional(),
+});
+
+const proxyActionPayloadSchema = z.object({
+  charId: z.string().trim().max(120),
+  messages: chatMessagesSchema,
 });
 
 const proxyChatPayloadSchema = z.object({
   messages: chatMessagesSchema,
   charId: z.string().trim().min(1).max(120),
   scenario: z.string().max(8000).optional(),
+  stream: z.boolean().optional(),
 });
 
 const hollowChatPayloadSchema = z.object({
   messages: chatMessagesSchema,
+  stream: z.boolean().optional(),
 });
 
 const summaryGeneratePayloadSchema = z.object({
@@ -199,6 +247,10 @@ const appSettingsPatchSchema = z.object({
     top_p: z.number().min(0).max(1).optional(),
     context_size: z.number().int().min(128).max(2_000_000).optional(),
     jailbreakPrompt: z.string().max(50000).optional(),
+    global_system_prompt: z.string().max(100000).optional(),
+    instruct_mode_format: z.string().max(5000).optional(),
+    nsfw_toggle: z.boolean().optional(),
+    main_prompt: z.string().max(100000).optional(),
     savedPreset: z.object({
       provider: apiProviderSchema,
       url: z.string().max(2048),
@@ -438,7 +490,11 @@ async function startServer() {
       max_tokens: 2048,
       top_p: 0.9,
       context_size: 4096,
-      jailbreakPrompt: ''
+      jailbreakPrompt: '',
+      global_system_prompt: '',
+      instruct_mode_format: '',
+      nsfw_toggle: true,
+      main_prompt: ''
     },
     theme: '墨色经典'
   };
@@ -475,8 +531,8 @@ async function startServer() {
     name: "AI",
     description: "You are a helpful assistant.",
     personality: "",
-    firstMessage: "",
-    mesExample: "",
+    first_mes: "",
+    mes_example: "",
   };
 
   let persistTimer: NodeJS.Timeout | null = null;
@@ -683,9 +739,7 @@ async function startServer() {
       const payload = parseWithSchema(lorebookPayloadSchema, req.body, "Lorebook payload");
       const newLore: Lorebook = {
         id: Date.now().toString(),
-        keys: payload.keys ?? [],
-        content: payload.content,
-        constant: payload.constant,
+        entries: payload.entries,
       };
       lorebooks.push(newLore);
       schedulePersist();
@@ -1348,11 +1402,15 @@ async function startServer() {
     characterId,
     scenario,
     logType,
+    stream = false,
+    res,
   }: {
     messages: ChatMessage[];
     characterId?: string;
     scenario?: string;
     logType: string;
+    stream?: boolean;
+    res?: Response;
   }) => {
     const char: Character =
       characters.find(c => c.id === characterId) ??
@@ -1379,16 +1437,33 @@ async function startServer() {
       .slice(-5)
       .map((m: ChatMessage) => m.content)
       .join("\n");
-    const activeLorebooks = lorebooks.filter(lore => {
+      
+    const allEntries = lorebooks.flatMap(lorebook => lorebook.entries || []);
+    const activeLorebooks = allEntries.filter(lore => {
       if (lore.constant) return true;
-      if (!lore.keys || !Array.isArray(lore.keys)) return false;
-      return lore.keys.some((key: string) => {
+      if (!lore.keys || !Array.isArray(lore.keys) || lore.keys.length === 0) return false;
+
+      const matches = lore.keys.map((key: string) => {
         if (!key) return false;
+        if (lore.regex_matching) {
+          try {
+            const regex = new RegExp(key, 'i');
+            return regex.test(recentText);
+          } catch {
+            return false;
+          }
+        }
         return recentText.toLowerCase().includes(key.toLowerCase());
       });
-    });
 
-    let systemPrompt = `[System Note: You are engaging in a private 1-on-1 text-based roleplay (Agent Network). You must strictly stay in character as ${char.name}. This is a focused scenario with the user. Other characters may appear briefly to drive the plot, but they are not the main focus. Use asterisks for *actions and expressions* and quotes for "speech". Do not break character or refer to yourself as an AI.]\n\n`;
+      if (lore.keyword_logic === 'AND') return matches.every(Boolean);
+      if (lore.keyword_logic === 'NOT') return !matches.some(Boolean);
+      return matches.some(Boolean); // ANY
+    }).sort((a, b) => (a.insertion_order ?? 50) - (b.insertion_order ?? 50));
+
+    let systemPrompt = char.system_prompt
+      ? char.system_prompt + "\n\n"
+      : `[System Note: You are engaging in a private 1-on-1 text-based roleplay (Agent Network). You must strictly stay in character as ${char.name}. This is a focused scenario with the user. Other characters may appear briefly to drive the plot, but they are not the main focus. Use asterisks for *actions and expressions* and quotes for "speech". Do not break character or refer to yourself as an AI.]\n\n`;
 
     systemPrompt += `[Character Identity: ${char.name}]\n${char.description || ""}\n\n`;
 
@@ -1401,20 +1476,53 @@ async function startServer() {
       systemPrompt += `[Current Scenario]\n${scenarioText}\n\n`;
     }
 
-    if (activeLorebooks.length > 0) {
+    const promptLorebooks = activeLorebooks.filter(l => !l.position || l.position === 'top_of_prompt' || l.position === 'before_char');
+    if (promptLorebooks.length > 0) {
       systemPrompt += `[World Info / Lorebook]\n`;
-      activeLorebooks.forEach(lore => {
+      promptLorebooks.forEach(lore => {
         systemPrompt += `- ${lore.content}\n`;
       });
       systemPrompt += `\n`;
     }
 
-    if (char.mesExample) {
-      systemPrompt += `[Dialogue Examples]\n${char.mesExample}\n\n`;
+    if (char.mes_example) {
+      systemPrompt += `[Dialogue Examples]\n${char.mes_example}\n\n`;
+    }
+
+    if (settings.api.global_system_prompt) {
+      systemPrompt += "\n[Global System Prompt]\n" + settings.api.global_system_prompt + "\n\n";
+    }
+
+    if (settings.api.main_prompt) {
+      systemPrompt += "\n[Main Prompt]\n" + settings.api.main_prompt + "\n\n";
+    }
+
+    if (settings.api.global_system_prompt) {
+      systemPrompt += "\n[Global System Prompt]\n" + settings.api.global_system_prompt + "\n\n";
+    }
+
+    if (settings.api.main_prompt) {
+      systemPrompt += "\n[Main Prompt]\n" + settings.api.main_prompt + "\n\n";
     }
 
     if (settings.api.jailbreakPrompt) {
       systemPrompt += "\n[System Override / Jailbreak]\n" + settings.api.jailbreakPrompt + "\n\n";
+    }
+
+    if (settings.api.instruct_mode_format) {
+      systemPrompt += "\n[Instruct Mode Format]\n" + settings.api.instruct_mode_format + "\n\n";
+    }
+
+    if (settings.api.nsfw_toggle !== undefined && !settings.api.nsfw_toggle) {
+        systemPrompt += "\n[System Note: NSFW content is STRICTLY PROHIBITED. Generate safe, family-friendly responses only.]\n\n";
+    }
+
+    if (settings.api.instruct_mode_format) {
+      systemPrompt += "\n[Instruct Mode Format]\n" + settings.api.instruct_mode_format + "\n\n";
+    }
+
+    if (settings.api.nsfw_toggle !== undefined && !settings.api.nsfw_toggle) {
+        systemPrompt += "\n[System Note: NSFW content is STRICTLY PROHIBITED. Generate safe, family-friendly responses only.]\n\n";
     }
 
     // INJECT SUMMARY DB MEMORY
@@ -1430,12 +1538,41 @@ async function startServer() {
     const maxContextChars = (Number(settings.api.context_size) || 4096) * 2.5;
     let currentLength = systemPrompt.length;
     const prunedMessages: ChatMessage[] = [];
+    
+    // Add post-history instructions length to tracking if present
+    if (char.post_history_instructions) {
+      currentLength += char.post_history_instructions.length;
+    }
 
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       const msgLen = messages[i].content.length;
       if (currentLength + msgLen > maxContextChars && prunedMessages.length > 0) break;
       prunedMessages.unshift(messages[i]);
       currentLength += msgLen;
+    }
+    
+    // Append post_history_instructions and bottom lorebooks
+    const bottomLorebooks = activeLorebooks.filter(l => l.position === 'bottom_of_prompt' || l.position === 'after_char');
+    let bottomContent = "";
+    if (bottomLorebooks.length > 0) {
+      bottomContent += `[World Info / Lorebook (Bottom)]\n`;
+      bottomLorebooks.forEach(lore => {
+        bottomContent += `- ${lore.content}\n`;
+      });
+      bottomContent += `\n`;
+    }
+
+    if (char.post_history_instructions) {
+      bottomContent += `\n[System Note]\n${char.post_history_instructions}`;
+    }
+
+    if (bottomContent) {
+      if (prunedMessages.length > 0) {
+        const lastMsg = prunedMessages[prunedMessages.length - 1];
+        lastMsg.content += `\n\n${bottomContent}`;
+      } else {
+        systemPrompt += `\n${bottomContent}\n`;
+      }
     }
     // -----------------------------
 
@@ -1465,6 +1602,7 @@ async function startServer() {
           temperature: Number(settings.api.temperature),
           max_tokens: Number(settings.api.max_tokens),
           top_p: Number(settings.api.top_p),
+          stream,
         }),
       });
 
@@ -1472,10 +1610,56 @@ async function startServer() {
         const errData = await response.text();
         throw new Error(`API Error: ${response.status} - ${errData}`);
       }
-      const data = await response.json();
-      replyContent = getOpenAIMessageText(data);
+      
+      if (stream && res) {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.flushHeaders();
+
+        const parser = createParser({
+          onEvent: (event: any) => {
+            if (event.type === 'event') {
+              if (event.data === '[DONE]') {
+                res.end();
+                return;
+              }
+              try {
+                const data = JSON.parse(event.data);
+                const chunk = data.choices[0]?.delta?.content || '';
+                if (chunk) {
+                  res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
+                  replyContent += chunk;
+                }
+              } catch (e) {
+                console.error("Error parsing stream event", e);
+              }
+            }
+          }
+        });
+
+        if (response.body) {
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder("utf-8");
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              parser.feed(decoder.decode(value));
+            }
+          } finally {
+            reader.releaseLock();
+          }
+        }
+        res.end();
+      } else {
+        const data = await response.json();
+        replyContent = getOpenAIMessageText(data);
+      }
     } else if (settings.api.provider === "Gemini") {
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${settings.api.model}:generateContent?key=${settings.api.key}`;
+      const endpoint = stream
+        ? `https://generativelanguage.googleapis.com/v1beta/models/${settings.api.model}:streamGenerateContent?key=${settings.api.key}`
+        : `https://generativelanguage.googleapis.com/v1beta/models/${settings.api.model}:generateContent?key=${settings.api.key}`;
 
       const geminiMessages = prunedMessages.map(m => ({
         role: m.role === "npc" ? "model" : "user",
@@ -1500,8 +1684,52 @@ async function startServer() {
         const errData = await response.text();
         throw new Error(`API Error: ${response.status} - ${errData}`);
       }
-      const data = await response.json();
-      replyContent = getGeminiMessageText(data);
+
+      if (stream && res) {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.flushHeaders();
+
+        if (response.body) {
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder("utf-8");
+          let buffer = '';
+
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              
+              buffer += decoder.decode(value, { stream: true });
+              
+              let boundary = buffer.indexOf('\n');
+              while (boundary !== -1) {
+                const line = buffer.slice(0, boundary).trim();
+                buffer = buffer.slice(boundary + 1);
+                boundary = buffer.indexOf('\n');
+                
+                if (line.startsWith('"text": "')) {
+                     try {
+                       const textChunk = JSON.parse(`{${line.endsWith(',') ? line.slice(0, -1) : line}}`).text;
+                       if (textChunk) {
+                         res.write(`data: ${JSON.stringify({ chunk: textChunk })}\n\n`);
+                         replyContent += textChunk;
+                       }
+                     } catch(e) { }
+                }
+              }
+            }
+          } finally {
+            reader.releaseLock();
+          }
+        }
+        res.end();
+
+      } else {
+        const data = await response.json();
+        replyContent = getGeminiMessageText(data);
+      }
     }
 
     const botMessage = {
@@ -1523,22 +1751,50 @@ async function startServer() {
     if (aiLogs.length > 50) aiLogs = aiLogs.slice(0, 50);
     schedulePersist();
 
-    return botMessage;
+    if (!stream) {
+      return botMessage;
+    }
   };
 
   app.post("/api/interknot/chat", async (req, res) => {
     try {
       const payload = parseWithSchema(interknotChatPayloadSchema, req.body, "InterKnot chat payload");
-      const botMessage = await runCharacterChat({
+      const result = await runCharacterChat({
         messages: payload.messages,
         characterId: payload.characterId,
         scenario: undefined,
         logType: "InterKnot Chat",
+        stream: payload.stream,
+        res
       });
-      res.json(botMessage);
+      if (!payload.stream) {
+        res.json(result);
+      }
     } catch (error) {
       console.error("Chat API Error:", error);
       handleRouteError(res, error, "InterKnot chat failed");
+    }
+  });
+
+  app.post("/api/proxy/action", (req, res) => {
+    try {
+      const payload = parseWithSchema(proxyActionPayloadSchema, req.body, "Proxy action payload");
+      interKnotHistories[payload.charId] = payload.messages;
+      schedulePersist();
+      res.json({ success: true });
+    } catch (error) {
+      handleRouteError(res, error, "Proxy action failed");
+    }
+  });
+
+  app.post("/api/hollow/action", (req, res) => {
+    try {
+      const payload = parseWithSchema(hollowChatPayloadSchema, req.body, "Hollow action payload");
+      hollowHistory = payload.messages;
+      schedulePersist();
+      res.json({ success: true });
+    } catch (error) {
+      handleRouteError(res, error, "Hollow action failed");
     }
   });
 
@@ -1551,13 +1807,17 @@ async function startServer() {
         schedulePersist();
       }
 
-      const botMessage = await runCharacterChat({
+      const result = await runCharacterChat({
         messages: payload.messages,
         characterId: payload.charId,
         scenario: scenarioText,
         logType: "Proxy Chat",
+        stream: payload.stream,
+        res
       });
-      res.json(botMessage);
+      if (!payload.stream) {
+        res.json(result);
+      }
     } catch (error) {
       console.error("Chat API Error:", error);
       handleRouteError(res, error, "Proxy chat failed");
@@ -1566,10 +1826,12 @@ async function startServer() {
 
   app.post("/api/hollow/chat", async (req, res) => {
     let messages: ChatMessage[] = [];
+    let isStream = false;
 
     try {
       const payload = parseWithSchema(hollowChatPayloadSchema, req.body, "Hollow chat payload");
       messages = payload.messages;
+      isStream = payload.stream ?? false;
     } catch (error) {
       return handleRouteError(res, error, "Invalid hollow chat payload");
     }
@@ -1585,7 +1847,16 @@ async function startServer() {
           content: `[未配置API密钥] 收到探索指令：“${latestMessage}”。请在设置中配置API密钥以启用真实世界探索。`,
           timestamp: new Date().toISOString()
         };
-        res.json(botMessage);
+        if (isStream) {
+          res.setHeader('Content-Type', 'text/event-stream');
+          res.setHeader('Cache-Control', 'no-cache');
+          res.setHeader('Connection', 'keep-alive');
+          res.flushHeaders();
+          res.write(`data: ${JSON.stringify({ chunk: botMessage.content })}\n\n`);
+          res.end();
+        } else {
+          res.json(botMessage);
+        }
       }, 1000);
       return;
     }
@@ -1597,12 +1868,25 @@ async function startServer() {
       const recentText = messages.slice(-5).map((m: any) => m.content).join('\n');
       const activeLorebooks = lorebooks.filter(lore => {
         if (lore.constant) return true;
-        if (!lore.keys || !Array.isArray(lore.keys)) return false;
-        return lore.keys.some((key: string) => {
+        if (!lore.keys || !Array.isArray(lore.keys) || lore.keys.length === 0) return false;
+
+        const matches = lore.keys.map((key: string) => {
           if (!key) return false;
+          if (lore.regex_matching) {
+            try {
+              const regex = new RegExp(key, 'i');
+              return regex.test(recentText);
+            } catch {
+              return false;
+            }
+          }
           return recentText.toLowerCase().includes(key.toLowerCase());
         });
-      });
+
+        if (lore.keyword_logic === 'AND') return matches.every(Boolean);
+        if (lore.keyword_logic === 'NOT') return !matches.some(Boolean);
+        return matches.some(Boolean); // ANY
+      }).sort((a, b) => (a.insertion_order ?? 50) - (b.insertion_order ?? 50));
 
       let systemPrompt = `[System Note: You are the Game Master and Narrator of the Zenless Zone Zero world (The Hollow). The user is exploring this large open world freely via text. 
 The following agents/characters are currently bound to the user and are silently acting in the background during each turn:
@@ -1613,9 +1897,10 @@ The following agents/characters are currently bound to the user and are silently
       
       systemPrompt += `\nIn each turn, you must describe the environment, the results of the user's actions, and briefly mention what the other characters are doing in the background to support the user or react to the situation. You act as the world itself, narrating events. Do not break character or refer to yourself as an AI.]\n\n`;
 
-      if (activeLorebooks.length > 0) {
+      const promptLorebooks = activeLorebooks.filter(l => !l.position || l.position === 'top_of_prompt' || l.position === 'before_char');
+      if (promptLorebooks.length > 0) {
         systemPrompt += `[World Info / Lorebook]\n`;
-        activeLorebooks.forEach(lore => {
+        promptLorebooks.forEach(lore => {
           systemPrompt += `- ${lore.content}\n`;
         });
         systemPrompt += `\n`;
@@ -1645,6 +1930,25 @@ The following agents/characters are currently bound to the user and are silently
         prunedMessages.unshift(messages[i]);
         currentLength += msgLen;
       }
+      
+      const bottomLorebooks = activeLorebooks.filter(l => l.position === 'bottom_of_prompt' || l.position === 'after_char');
+      let bottomContent = "";
+      if (bottomLorebooks.length > 0) {
+        bottomContent += `[World Info / Lorebook (Bottom)]\n`;
+        bottomLorebooks.forEach(lore => {
+          bottomContent += `- ${lore.content}\n`;
+        });
+        bottomContent += `\n`;
+      }
+
+      if (bottomContent) {
+        if (prunedMessages.length > 0) {
+          const lastMsg = prunedMessages[prunedMessages.length - 1];
+          lastMsg.content += `\n\n${bottomContent}`;
+        } else {
+          systemPrompt += `\n${bottomContent}\n`;
+        }
+      }
       // -----------------------------
 
       if (settings.api.provider === 'OpenAI' || settings.api.provider === 'Custom') {
@@ -1670,7 +1974,8 @@ The following agents/characters are currently bound to the user and are silently
             messages: apiMessages,
             temperature: Number(settings.api.temperature),
             max_tokens: Number(settings.api.max_tokens),
-            top_p: Number(settings.api.top_p)
+            top_p: Number(settings.api.top_p),
+            stream: isStream
           })
         });
         
@@ -1678,11 +1983,57 @@ The following agents/characters are currently bound to the user and are silently
           const errData = await response.text();
           throw new Error(`API Error: ${response.status} - ${errData}`);
         }
-        const data = await response.json();
-        replyContent = getOpenAIMessageText(data);
+        
+        if (isStream) {
+          res.setHeader('Content-Type', 'text/event-stream');
+          res.setHeader('Cache-Control', 'no-cache');
+          res.setHeader('Connection', 'keep-alive');
+          res.flushHeaders();
+
+          const parser = createParser({
+            onEvent: (event: any) => {
+              if (event.type === 'event') {
+                if (event.data === '[DONE]') {
+                  res.end();
+                  return;
+                }
+                try {
+                  const data = JSON.parse(event.data);
+                  const chunk = data.choices[0]?.delta?.content || '';
+                  if (chunk) {
+                    res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
+                    replyContent += chunk;
+                  }
+                } catch (e) {
+                  console.error("Error parsing stream event", e);
+                }
+              }
+            }
+          });
+
+          if (response.body) {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder("utf-8");
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                parser.feed(decoder.decode(value));
+              }
+            } finally {
+              reader.releaseLock();
+            }
+          }
+          res.end();
+        } else {
+          const data = await response.json();
+          replyContent = getOpenAIMessageText(data);
+        }
 
       } else if (settings.api.provider === 'Gemini') {
-        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${settings.api.model}:generateContent?key=${settings.api.key}`;
+        const endpoint = isStream
+          ? `https://generativelanguage.googleapis.com/v1beta/models/${settings.api.model}:streamGenerateContent?key=${settings.api.key}`
+          : `https://generativelanguage.googleapis.com/v1beta/models/${settings.api.model}:generateContent?key=${settings.api.key}`;
         
         const geminiMessages = prunedMessages.map(m => ({
           role: m.role === 'npc' ? 'model' : 'user',
@@ -1707,8 +2058,51 @@ The following agents/characters are currently bound to the user and are silently
           const errData = await response.text();
           throw new Error(`API Error: ${response.status} - ${errData}`);
         }
-        const data = await response.json();
-        replyContent = getGeminiMessageText(data);
+
+        if (isStream) {
+          res.setHeader('Content-Type', 'text/event-stream');
+          res.setHeader('Cache-Control', 'no-cache');
+          res.setHeader('Connection', 'keep-alive');
+          res.flushHeaders();
+
+          if (response.body) {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder("utf-8");
+            let buffer = '';
+
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                
+                buffer += decoder.decode(value, { stream: true });
+                
+                let boundary = buffer.indexOf('\n');
+                while (boundary !== -1) {
+                  const line = buffer.slice(0, boundary).trim();
+                  buffer = buffer.slice(boundary + 1);
+                  boundary = buffer.indexOf('\n');
+                  
+                  if (line.startsWith('"text": "')) {
+                       try {
+                         const textChunk = JSON.parse(`{${line.endsWith(',') ? line.slice(0, -1) : line}}`).text;
+                         if (textChunk) {
+                           res.write(`data: ${JSON.stringify({ chunk: textChunk })}\n\n`);
+                           replyContent += textChunk;
+                         }
+                       } catch(e) { }
+                  }
+                }
+              }
+            } finally {
+              reader.releaseLock();
+            }
+          }
+          res.end();
+        } else {
+          const data = await response.json();
+          replyContent = getGeminiMessageText(data);
+        }
       }
 
       const botMessage = {
@@ -1730,7 +2124,9 @@ The following agents/characters are currently bound to the user and are silently
       if (aiLogs.length > 50) aiLogs = aiLogs.slice(0, 50);
       schedulePersist();
 
-      res.json(botMessage);
+      if (!isStream) {
+        res.json(botMessage);
+      }
 
     } catch (error) {
       console.error("Chat API Error:", error);
